@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎬 AI Video Summarizer - Multi-Language Support</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1><i class="fas fa-video"></i> AI Video Summarizer</h1>
+                <p class="subtitle">Transform long videos into concise, intelligent summaries with multi-language support</p>
+                <div class="features-pills">
+                    <span class="pill"><i class="fas fa-language"></i> 22+ Indian Languages</span>
+                    <span class="pill"><i class="fas fa-brain"></i> AI-Powered</span>
+                    <span class="pill"><i class="fas fa-magic"></i> Topic-Based</span>
+                    <span class="pill"><i class="fas fa-microphone"></i> Voice Generation</span>
+                </div>
+            </div>
+        </header>
+        
+        <div class="main-card">
+            <form id="main-form" enctype="multipart/form-data">
+                <!-- Video Input Section -->
+                <div class="input-section">
+                    <h3><i class="fas fa-upload"></i> Video Input</h3>
+                    <div class="input-methods">
+                        <div class="input-method">
+                            <label for="video-upload" class="upload-label">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                                <span>Upload Video File</span>
+                                <small>Max 100MB, up to 60 minutes</small>
+                            </label>
+                            <input type="file" id="video-upload" name="video" accept="video/*" style="display: none;">
+                        </div>
+                        
+                        <div class="separator">
+                            <span>OR</span>
+                        </div>
+                        
+                        <div class="input-method">
+                            <label for="yt-url"><i class="fab fa-youtube"></i> YouTube URL</label>
+                            <input type="url" id="yt-url" name="yt_url" placeholder="https://www.youtube.com/watch?v=..." class="form-control">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Language Configuration Section -->
+                <div class="config-section">
+                    <h3><i class="fas fa-language"></i> Language Configuration</h3>
+                    <div class="language-grid">
+                        <div class="form-group">
+                            <label for="source-language"><i class="fas fa-microphone"></i> Source Language</label>
+                            <select id="source-language" name="source_language" class="form-control">
+                                <option value="auto">🔍 Auto-detect</option>
+                                <optgroup label="🇮🇳 Indian Languages">
+                                    <option value="hindi">🇮🇳 हिन्दी (Hindi)</option>
+                                    <option value="bengali">🇮🇳 বাংলা (Bengali)</option>
+                                    <option value="telugu">🇮🇳 తెలుగు (Telugu)</option>
+                                    <option value="marathi">🇮🇳 मराठी (Marathi)</option>
+                                    <option value="tamil">🇮🇳 தமிழ் (Tamil)</option>
+                                    <option value="gujarati">🇮🇳 ગુજરાતી (Gujarati)</option>
+                                    <option value="urdu">🇮🇳 اردو (Urdu)</option>
+                                    <option value="kannada">🇮🇳 ಕನ್ನಡ (Kannada)</option>
+                                    <option value="malayalam">🇮🇳 മലയാളം (Malayalam)</option>
+                                    <option value="punjabi">🇮🇳 ਪੰਜਾਬੀ (Punjabi)</option>
+                                    <option value="odia">🇮🇳 ଓଡ଼ିଆ (Odia)</option>
+                                    <option value="assamese">🇮🇳 অসমীয়া (Assamese)</option>
+                                    <option value="nepali">🇳🇵 नेपाली (Nepali)</option>
+                                    <option value="sanskrit">🇮🇳 संस्कृत (Sanskrit)</option>
+                                </optgroup>
+                                <optgroup label="🌍 International Languages">
+                                    <option value="english">🇺🇸 English</option>
+                                    <option value="arabic">🇸🇦 العربية (Arabic)</option>
+                                    <option value="chinese">🇨🇳 中文 (Chinese)</option>
+                                    <option value="spanish">🇪🇸 Español (Spanish)</option>
+                                    <option value="french">🇫🇷 Français (French)</option>
+                                    <option value="german">🇩🇪 Deutsch (German)</option>
+                                    <option value="japanese">🇯🇵 日本語 (Japanese)</option>
+                                    <option value="korean">🇰🇷 한국어 (Korean)</option>
+                                    <option value="russian">🇷🇺 Русский (Russian)</option>
+                                    <option value="portuguese">🇧🇷 Português (Portuguese)</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="target-language"><i class="fas fa-bullhorn"></i> Summary Language</label>
+                            <select id="target-language" name="target_language" class="form-control">
+                                <optgroup label="🇮🇳 Indian Languages">
+                                    <option value="hindi">🇮🇳 हिन्दी (Hindi)</option>
+                                    <option value="bengali">🇮🇳 বাংলা (Bengali)</option>
+                                    <option value="telugu">🇮🇳 తెలుగు (Telugu)</option>
+                                    <option value="marathi">🇮🇳 मराठी (Marathi)</option>
+                                    <option value="tamil">🇮🇳 தமிழ் (Tamil)</option>
+                                    <option value="gujarati">🇮🇳 ગુજરાતી (Gujarati)</option>
+                                    <option value="urdu">🇮🇳 اردو (Urdu)</option>
+                                    <option value="kannada">🇮🇳 ಕನ್ನಡ (Kannada)</option>
+                                    <option value="malayalam">🇮🇳 മലയാളം (Malayalam)</option>
+                                    <option value="punjabi">🇮🇳 ਪੰਜਾਬੀ (Punjabi)</option>
+                                    <option value="odia">🇮🇳 ଓଡ଼ିଆ (Odia)</option>
+                                    <option value="assamese">🇮🇳 অসমীয়া (Assamese)</option>
+                                    <option value="nepali">🇳🇵 नेपाली (Nepali)</option>
+                                    <option value="sanskrit">🇮🇳 संस्कृत (Sanskrit)</option>
+                                </optgroup>
+                                <optgroup label="🌍 International Languages">
+                                    <option value="english" selected>🇺🇸 English</option>
+                                    <option value="arabic">🇸🇦 العربية (Arabic)</option>
+                                    <option value="chinese">🇨🇳 中文 (Chinese)</option>
+                                    <option value="spanish">🇪🇸 Español (Spanish)</option>
+                                    <option value="french">🇫🇷 Français (French)</option>
+                                    <option value="german">🇩🇪 Deutsch (German)</option>
+                                    <option value="japanese">🇯🇵 日本語 (Japanese)</option>
+                                    <option value="korean">🇰🇷 한국어 (Korean)</option>
+                                    <option value="russian">🇷🇺 Русский (Russian)</option>
+                                    <option value="portuguese">🇧🇷 Português (Portuguese)</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Output Configuration Section -->
+                <div class="config-section">
+                    <h3><i class="fas fa-cogs"></i> Output Configuration</h3>
+                    <div class="config-grid">
+                        <div class="form-group">
+                            <label for="voice"><i class="fas fa-volume-up"></i> Voice Style</label>
+                            <select id="voice" name="voice" class="form-control">
+                                <option value="auto">🎯 Auto-select Best Voice</option>
+                                <optgroup label="English Voices">
+                                    <option value="en-US-Standard-A">🇺🇸 US English (Male)</option>
+                                    <option value="en-US-Standard-C" selected>🇺🇸 US English (Female)</option>
+                                    <option value="en-GB-Standard-A">🇬🇧 British English (Female)</option>
+                                    <option value="en-AU-Standard-A">🇦🇺 Australian English (Female)</option>
+                                </optgroup>
+                                <optgroup label="Hindi Voices">
+                                    <option value="hi-IN-Standard-A">🇮🇳 Hindi (Female)</option>
+                                    <option value="hi-IN-Standard-B">🇮🇳 Hindi (Male)</option>
+                                </optgroup>
+                                <!-- More voices will be populated dynamically -->
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="resolution"><i class="fas fa-tv"></i> Video Quality</label>
+                            <select id="resolution" name="resolution" class="form-control">
+                                <option value="480p" selected>📱 480p (Fast, Mobile-friendly)</option>
+                                <option value="720p">💻 720p (Balanced Quality)</option>
+                                <option value="1080p">🖥️ 1080p (High Quality)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="summary_length"><i class="fas fa-clock"></i> Summary Length</label>
+                            <select id="summary_length" name="summary_length" class="form-control">
+                                <option value="short">⚡ Short (1-2 minutes)</option>
+                                <option value="medium" selected>⚖️ Medium (3-5 minutes)</option>
+                                <option value="long">📚 Long (5-10 minutes)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="enable_ocr">
+                                <input type="checkbox" id="enable_ocr" name="enable_ocr" checked>
+                                <i class="fas fa-text-width"></i> Extract Text from Video
+                            </label>
+                            <small>Analyze text in video frames for better context</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Section -->
+                <div class="submit-section">
+                    <button type="submit" class="submit-btn">
+                        <i class="fas fa-play-circle"></i>
+                        <span>Process Video</span>
+                    </button>
+                    <p class="processing-note">
+                        <i class="fas fa-info-circle"></i>
+                        Processing typically takes 20-30% of the original video length
+                    </p>
+                </div>
+            </form>
+        </div>
+
+        <!-- Processing Status -->
+        <div id="loader" class="hidden">
+            <div class="processing-card">
+                <div class="spinner-container">
+                    <div class="spinner"></div>
+                    <div class="progress-circle">
+                        <span id="progress-percentage">0%</span>
+                    </div>
+                </div>
+                <h3 id="processing-title">Processing your video...</h3>
+                <p id="processing-message">Initializing...</p>
+                <div class="progress-bar">
+                    <div id="progress-fill"></div>
+                </div>
+                <div class="processing-steps">
+                    <div class="step" id="step-download">
+                        <i class="fas fa-download"></i>
+                        <span>Download/Upload</span>
+                    </div>
+                    <div class="step" id="step-transcribe">
+                        <i class="fas fa-microphone"></i>
+                        <span>Transcription</span>
+                    </div>
+                    <div class="step" id="step-keyframes">
+                        <i class="fas fa-images"></i>
+                        <span>Keyframes</span>
+                    </div>
+                    <div class="step" id="step-analyze">
+                        <i class="fas fa-brain"></i>
+                        <span>Analysis</span>
+                    </div>
+                    <div class="step" id="step-generate">
+                        <i class="fas fa-video"></i>
+                        <span>Generation</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="result-container" class="hidden">
+            <div class="results-header">
+                <h2><i class="fas fa-check-circle"></i> Processing Complete!</h2>
+                <p>Your video has been successfully summarized. Select a topic below to view the summary:</p>
+            </div>
+            
+            <div id="topics-grid" class="topics-grid">
+                <!-- Topics will be populated dynamically -->
+            </div>
+            
+            <div id="topic-player" class="topic-player hidden">
+                <div class="player-header">
+                    <h3 id="current-topic-title">Topic Title</h3>
+                    <button id="close-player" class="close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="player-content">
+                    <video id="topic-video" controls preload="metadata">
+                        Your browser does not support the video tag.
+                    </video>
+                    <div class="topic-info">
+                        <div class="topic-summary">
+                            <h4><i class="fas fa-file-text"></i> Summary</h4>
+                            <p id="topic-summary-text">Summary will appear here...</p>
+                        </div>
+                        <div class="topic-keywords">
+                            <h4><i class="fas fa-tags"></i> Key Topics</h4>
+                            <div id="topic-keywords-list">
+                                <!-- Keywords will be populated dynamically -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="download-section">
+                <h3><i class="fas fa-download"></i> Download Options</h3>
+                <div class="download-buttons">
+                    <button id="download-all" class="download-btn">
+                        <i class="fas fa-file-archive"></i>
+                        Download All Summaries
+                    </button>
+                    <button id="download-transcript" class="download-btn">
+                        <i class="fas fa-file-text"></i>
+                        Download Transcript
+                    </button>
+                    <button id="download-keyframes" class="download-btn">
+                        <i class="fas fa-images"></i>
+                        Download Keyframes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
