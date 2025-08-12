@@ -258,21 +258,25 @@ def translate_text(
     logger.error(f"Translation failed for {source_lang} -> {target_lang}")
     return text, 'failed'
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 def translate_segments(
     segments: List[Dict], 
     source_lang: str, 
     target_lang: str,
-    method: str = 'auto'
+    method: str = 'auto',
+    max_workers: int = 5   # number of parallel threads
 ) -> List[Dict]:
     """
-    Translate text segments from source to target language.
-    
+    Translate text segments from source to target language with multithreading.
+
     Args:
         segments: List of segment dictionaries with 'text' field
         source_lang: Source language
         target_lang: Target language
         method: Translation method to use
-        
+        max_workers: Number of threads for parallel translation
+
     Returns:
         List of segments with translated text
     """
@@ -280,46 +284,108 @@ def translate_segments(
         return segments
     
     logger.info(f"Translating {len(segments)} segments from {source_lang} to {target_lang}")
-    
-    translated_segments = []
+
+    translated_segments = [None] * len(segments)  # placeholder for results
     translation_stats = {'success': 0, 'failed': 0, 'methods': {}}
-    
-    for i, segment in enumerate(segments):
+
+    def translate_one(index, segment):
         original_text = segment.get('text', '')
-        
         if not original_text.strip():
-            translated_segments.append(segment.copy())
-            continue
-        
-        # Translate the text
+            return index, segment.copy()
+
         translated_text, method_used = translate_text(
             original_text, source_lang, target_lang, method
         )
-        
-        # Update statistics
-        if method_used not in ['failed']:
+
+        # stats
+        if method_used != 'failed':
             translation_stats['success'] += 1
             translation_stats['methods'][method_used] = translation_stats['methods'].get(method_used, 0) + 1
         else:
             translation_stats['failed'] += 1
-        
-        # Create new segment with translated text
+
         new_segment = segment.copy()
         new_segment['text'] = translated_text
         new_segment['original_text'] = original_text
         new_segment['translation_method'] = method_used
-        
-        translated_segments.append(new_segment)
-        
-        # Progress logging
-        if (i + 1) % 10 == 0:
-            logger.info(f"Translated {i + 1}/{len(segments)} segments")
-    
-    # Log final statistics
+
+        return index, new_segment
+
+    # Run translations in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(translate_one, i, seg) for i, seg in enumerate(segments)]
+        for future in as_completed(futures):
+            idx, translated_seg = future.result()
+            translated_segments[idx] = translated_seg
+
     logger.info(f"Translation complete: {translation_stats['success']} successful, {translation_stats['failed']} failed")
     logger.info(f"Methods used: {translation_stats['methods']}")
     
     return translated_segments
+
+
+# def translate_segments(
+#     segments: List[Dict], 
+#     source_lang: str, 
+#     target_lang: str,
+#     method: str = 'auto'
+# ) -> List[Dict]:
+#     """
+#     Translate text segments from source to target language.
+    
+#     Args:
+#         segments: List of segment dictionaries with 'text' field
+#         source_lang: Source language
+#         target_lang: Target language
+#         method: Translation method to use
+        
+#     Returns:
+#         List of segments with translated text
+#     """
+#     if not segments:
+#         return segments
+    
+#     logger.info(f"Translating {len(segments)} segments from {source_lang} to {target_lang}")
+    
+#     translated_segments = []
+#     translation_stats = {'success': 0, 'failed': 0, 'methods': {}}
+    
+#     for i, segment in enumerate(segments):
+#         original_text = segment.get('text', '')
+        
+#         if not original_text.strip():
+#             translated_segments.append(segment.copy())
+#             continue
+        
+#         # Translate the text
+#         translated_text, method_used = translate_text(
+#             original_text, source_lang, target_lang, method
+#         )
+        
+#         # Update statistics
+#         if method_used not in ['failed']:
+#             translation_stats['success'] += 1
+#             translation_stats['methods'][method_used] = translation_stats['methods'].get(method_used, 0) + 1
+#         else:
+#             translation_stats['failed'] += 1
+        
+#         # Create new segment with translated text
+#         new_segment = segment.copy()
+#         new_segment['text'] = translated_text
+#         new_segment['original_text'] = original_text
+#         new_segment['translation_method'] = method_used
+        
+#         translated_segments.append(new_segment)
+        
+#         # Progress logging
+#         if (i + 1) % 10 == 0:
+#             logger.info(f"Translated {i + 1}/{len(segments)} segments")
+    
+#     # Log final statistics
+#     logger.info(f"Translation complete: {translation_stats['success']} successful, {translation_stats['failed']} failed")
+#     logger.info(f"Methods used: {translation_stats['methods']}")
+    
+#     return translated_segments
 
 def get_available_languages() -> Dict[str, Dict]:
     """

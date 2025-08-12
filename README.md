@@ -27,7 +27,7 @@ An intelligent video summarization system that automatically processes long vide
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8 or higher
+- Python 3.11
 - FFmpeg installed on your system
 - At least 4GB RAM (8GB recommended for large videos)
 - Internet connection for translation services
@@ -36,7 +36,7 @@ An intelligent video summarization system that automatically processes long vide
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/video-summarizer.git
+   git clone https://github.com/meghanavemala/major-project
    cd video-summarizer
    ```
 

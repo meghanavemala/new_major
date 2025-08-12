@@ -23,7 +23,6 @@ wheels/
 # Virtual Environment
 venv/
 ENV/
-
 # Environment variables
 .env
 
@@ -59,3 +58,7 @@ processed/*
 .Trashes
 ehthumbs.db
 Thumbs.db
+downloads/
+zzz.py
+wsgi.py
+voice-cloning.py

@@ -12,13 +12,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    logger.info("Downloading NLTK data...")
-    nltk.download('punkt')
-    nltk.download('stopwords')
+# try:
+#     nltk.data.find('tokenizers/punkt')
+#     nltk.data.find('corpora/stopwords')
+# except LookupError:
+#     logger.info("Downloading NLTK data...")
+#     nltk.download('punkt')
+#     nltk.download('stopwords')
 
 # Initialize models as None. They will be loaded on first use.
 SUMMARIZERS = {

@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor
-
+import re
 from flask import (
     Flask, render_template, request, jsonify, 
     send_from_directory, session, Response, stream_with_context
@@ -31,8 +31,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('app.log')
+        logging.FileHandler(filename='app.log',encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -53,7 +52,6 @@ CONFIG = {
     'DEFAULT_RESOLUTION': '480p',
     'ENABLE_DARK_MODE': True,
 }
-
 # Ensure directories exist
 for dir_path in [CONFIG['UPLOAD_DIR'], CONFIG['PROCESSED_DIR']]:
     os.makedirs(dir_path, exist_ok=True)
@@ -121,7 +119,7 @@ def index():
         resolutions=SUPPORTED_RESOLUTIONS,
         default_resolution=CONFIG['DEFAULT_RESOLUTION']
     )
-
+from flask import copy_current_request_context
 @app.route('/api/process', methods=['POST'])
 def process():
     """Handle video processing request with enhanced language support."""
@@ -142,10 +140,11 @@ def process():
         return jsonify({'error': f'Unsupported target language: {target_language}'}), 400
     
     # Generate a unique ID for this processing job
-    video_id = str(int(time.time()))
-    
+    video_id= str(int(time.time()))
+    @copy_current_request_context
     # Start processing in background
     def process_video():
+        nonlocal video_id
         try:
             update_processing_status(video_id, 'downloading', 5, 'Downloading video...')
             
@@ -241,7 +240,7 @@ def process():
                 keywords = extract_keywords(
                     cluster_texts, 
                     n_keywords=5,
-                    language=language
+                    language=target_language
                 )
                 cluster_keywords.append(keywords)
                 
@@ -255,7 +254,7 @@ def process():
                 summary = summarize_cluster(
                     cluster,
                     language=target_language,
-                    summary_type=summary_length
+                    use_extractive=True
                 )
                 summaries.append(summary)
                 
@@ -281,13 +280,11 @@ def process():
                 )
                 video_out = make_summary_video(
                     keyframes_dir=keyframes_dir,
-                    audio_path=tts_path,
-                    output_dir=CONFIG['PROCESSED_DIR'],
+                    tts_audio_relpath=tts_path,
+                    processed_dir=CONFIG['PROCESSED_DIR'],
                     video_id=video_id,
                     cluster_id=cluster_id,
-                    resolution=resolution,
                     subtitles=summaries[cluster_id],
-                    keywords=keywords
                 )
                 summary_videos.append(video_out)
             
@@ -370,9 +367,10 @@ def stream_video(video_id: str, cluster_id: int):
             as_attachment=False,
             mimetype='video/mp4'
         )
-    
+    start,end=0,0
     # Handle byte range requests for streaming
     def generate():
+        nonlocal start,end
         with open(video_path, 'rb') as f:
             f.seek(0, 2)
             file_size = f.tell()
@@ -489,6 +487,6 @@ if __name__ == '__main__':
     
     # Start the Flask app
     try:
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)), debug=False, use_reloader=False)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
