@@ -54,8 +54,8 @@ sudo apt install python3-dev python3-pip python3-venv build-essential
 ### 1. Clone and Setup
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/video-summarizer.git
-cd video-summarizer
+git clone https://github.com/meghanavemala/major-project.git
+cd major-project
 
 # Create virtual environment
 python -m venv venv
@@ -157,6 +157,11 @@ which ffmpeg
 # Reinstall PyTorch
 pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+```bash
+# If want to use GPU
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
 #### ❌ "Tesseract not found"
