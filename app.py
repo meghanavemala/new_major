@@ -20,7 +20,7 @@ from utils.keyframes import extract_keyframes, get_keyframe_text_summary
 from utils.clustering import cluster_segments, extract_keywords
 from utils.summarizer import summarize_cluster
 from utils.tts import text_to_speech, SUPPORTED_VOICES, get_available_voices
-from utils.video_maker import make_summary_video, SUPPORTED_RESOLUTIONS
+from utils.video_maker import make_summary_video, SUPPORTED_RESOLUTIONS, select_keyframes_for_topic
 from utils.translator import (
     translate_text, translate_segments, get_available_languages,
     detect_language, LANGUAGE_MAPPINGS
@@ -271,20 +271,27 @@ def process():
             
             # 6. Create summary videos
             summary_videos = []
-            for cluster_id, (tts_path, keywords) in enumerate(zip(tts_paths, cluster_keywords)):
+            # Load keyframe metadata
+            with open(os.path.join(keyframes_dir, 'keyframes_metadata.json'), 'r', encoding='utf-8') as f:
+                keyframe_metadata = json.load(f)['keyframes']
+            for cluster_id, (tts_path, keywords, cluster) in enumerate(zip(tts_paths, cluster_keywords, clustered)):
                 update_processing_status(
                     video_id,
                     'rendering',
                     80 + (15 * cluster_id // len(tts_paths)),
                     f'Creating video for topic {cluster_id + 1}...'
                 )
+                # Get topic start/end times from cluster segments
+                topic_start = min(seg['start'] for seg in cluster)
+                topic_end = max(seg['end'] for seg in cluster)
+                topic_keyframes = select_keyframes_for_topic(keyframe_metadata, topic_start, topic_end)
+                output_path = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}_summary_{cluster_id}")
                 video_out = make_summary_video(
-                    keyframes_dir=keyframes_dir,
-                    tts_audio_relpath=tts_path,
-                    processed_dir=CONFIG['PROCESSED_DIR'],
-                    video_id=video_id,
-                    cluster_id=cluster_id,
-                    subtitles=summaries[cluster_id],
+                    keyframes=topic_keyframes,
+                    tts_audio_path=tts_path,
+                    output_path=output_path,
+                    target_width=854,
+                    fps=30
                 )
                 summary_videos.append(video_out)
             

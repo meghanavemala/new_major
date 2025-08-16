@@ -1,11 +1,16 @@
+"""
+This file handles the creation of summary videos by combining extracted keyframes, generated audio summaries, and optional subtitles.
+It now supports per-topic video generation: for each topic, only the keyframes whose timestamps fall within the topic's segment times are used, and each keyframe is shown for a proportional duration to match the summary audio.
+"""
 import os
 import cv2
 import numpy as np
 from pydub import AudioSegment
 import subprocess
 import logging
-import os
+import shutil
 from typing import Optional, Tuple, Dict, List
+from pathlib import Path
 
 # Supported video resolutions (width, height)
 SUPPORTED_RESOLUTIONS = {
@@ -30,181 +35,131 @@ def add_subtitle_to_frame(frame: np.ndarray, text: str, position: Tuple[int, int
                          font_scale: float = 1.0, color: Tuple[int, int, int] = (255, 255, 255),
                          thickness: int = 2, font_face: int = cv2.FONT_HERSHEY_SIMPLEX) -> np.ndarray:
     """Add subtitle text to a video frame."""
-    # Add black background for better text visibility
-    (text_width, text_height), _ = cv2.getTextSize(text, font_face, font_scale, thickness)
-    x, y = position
-    cv2.rectangle(frame, (x-5, y - text_height - 10), 
-                 (x + text_width + 5, y + 5), (0, 0, 0), -1)
+    frame = frame.copy()  # Create a copy to avoid modifying the original
     
-    # Add text
-    cv2.putText(frame, text, (x, y), font_face, font_scale, color, thickness, cv2.LINE_AA)
+    # Split text into multiple lines if too long
+    max_width = frame.shape[1] - 100  # Leave margins
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        current_line.append(word)
+        (text_width, _), _ = cv2.getTextSize(' '.join(current_line), font_face, font_scale, thickness)
+        if text_width > max_width:
+            if len(current_line) > 1:
+                current_line.pop()
+                lines.append(' '.join(current_line))
+                current_line = [word]
+            else:
+                lines.append(' '.join(current_line))
+                current_line = []
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    # Draw each line
+    x, y = position
+    line_height = int(text_height * 1.5)
+    
+    for i, line in enumerate(lines):
+        y_pos = y + i * line_height
+        (text_width, text_height), _ = cv2.getTextSize(line, font_face, font_scale, thickness)
+        
+        # Add black background for better text visibility
+        cv2.rectangle(frame, 
+                     (x-5, y_pos - text_height - 5),
+                     (x + text_width + 5, y_pos + 5),
+                     (0, 0, 0), -1)
+        
+        # Add text
+        cv2.putText(frame, line, (x, y_pos), font_face, font_scale, color, thickness, cv2.LINE_AA)
+    
     return frame
 
+def select_keyframes_for_topic(keyframe_metadata, topic_start, topic_end):
+    """Select keyframes whose timestamps fall within the topic's segment times."""
+    return [kf for kf in keyframe_metadata if topic_start <= kf['timestamp'] <= topic_end]
+
+# Update make_summary_video to accept a list of keyframe filepaths and their timestamps
+# Instead of reading all images from a directory, accept a list of filepaths (with timestamps)
 def make_summary_video(
-    keyframes_dir: str, 
-    tts_audio_relpath: str, 
-    processed_dir: str, 
-    video_id: str, 
-    cluster_id: int,
-    subtitles: Optional[list] = None,
+    keyframes: list,  # List of dicts with 'filepath' and 'timestamp'
+    tts_audio_path: str,
+    output_path: str,
     target_width: int = 854,
     fps: int = 30
 ) -> Optional[str]:
     """
-    Create a summary video from keyframes and audio.
-    
-    Args:
-        keyframes_dir: Directory containing keyframe images
-        tts_audio_relpath: Path to TTS audio file (relative to processed_dir)
-        processed_dir: Directory to save output files
-        video_id: Unique ID for the video
-        cluster_id: ID of the current topic cluster
-        subtitles: List of (start_time, end_time, text) for subtitles
-        target_width: Target width of output video (height will be calculated)
-        fps: Frames per second for output video
-        
-    Returns:
-        Relative path to the generated video file, or None on failure
+    Create a summary video for a topic from selected keyframes and audio.
+    Each keyframe is shown for a proportional duration to match the audio length.
     """
+    temp_video = None
+    temp_audio = None
     try:
-        # Get all image files
-        img_files = sorted(
-            [f for f in os.listdir(keyframes_dir) 
-             if f.lower().endswith(('.png', '.jpg', '.jpeg'))],
-            key=lambda x: int(''.join(filter(str.isdigit, x)) or 0)
-        )
-        
-        if not img_files:
-            logger.error(f"No image files found in {keyframes_dir}")
+        if not keyframes:
+            logger.error("No keyframes provided for topic video.")
             return None
-        
         # Read the first image to get dimensions
-        first_img = cv2.imread(os.path.join(keyframes_dir, img_files[0]))
+        first_img = cv2.imread(keyframes[0]['filepath'])
         if first_img is None:
-            logger.error(f"Failed to read image: {img_files[0]}")
+            logger.error(f"Failed to read image: {keyframes[0]['filepath']}")
             return None
-            
-        # Resize to target dimensions while maintaining aspect ratio
         first_img = resize_frame(first_img, target_width)
         height, width = first_img.shape[:2]
-        
         # Output paths
-        temp_video = os.path.join(processed_dir, f"{video_id}_summary_{cluster_id}_temp.mp4")
-        final_video = os.path.join(processed_dir, f"{video_id}_summary_{cluster_id}.mp4")
-        
-        # Create video writer with better quality settings
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Better compatibility than 'mp4v'
-        out = cv2.VideoWriter(
-            temp_video, 
-            fourcc, 
-            fps,  # Higher FPS for smoother playback
-            (width, height)
-        )
-        
-        # Calculate duration per frame in the output video
-        audio_file = os.path.join(processed_dir, tts_audio_relpath)
-        audio = AudioSegment.from_file(audio_file)
-        audio_duration = len(audio) / 1000.0  # Convert to seconds
-        
-        # Calculate how many times to repeat each frame to match audio duration
-        if len(img_files) > 0:
-            frames_per_image = max(1, int((audio_duration * fps) / len(img_files)))
-        else:
-            frames_per_image = fps  # Fallback: 1 second per frame
-        
-        # Process each frame
-        frame_times = []  # For subtitle timing
-        current_time = 0
-        time_per_frame = 1.0 / fps
-        
-        for img_file in img_files:
-            img_path = os.path.join(keyframes_dir, img_file)
-            frame = cv2.imread(img_path)
-            if frame is None:
-                logger.warning(f"Skipping corrupted image: {img_file}")
+        temp_video = output_path + "_temp.avi"
+        final_video = output_path + ".mp4"
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(temp_video, fourcc, fps, (width, height))
+        if not out.isOpened():
+            logger.error("Failed to create video writer with XVID codec.")
+            return None
+        # Load and process audio
+        if not os.path.exists(tts_audio_path):
+            logger.error(f"Audio file not found: {tts_audio_path}")
+            return None
+        audio = AudioSegment.from_file(tts_audio_path)
+        audio_duration = len(audio) / 1000.0  # seconds
+        n_keyframes = len(keyframes)
+        frame_duration = audio_duration / n_keyframes if n_keyframes > 0 else 1.0
+        frames_per_image = max(1, int(frame_duration * fps))
+        # Write frames
+        for kf in keyframes:
+            img = cv2.imread(kf['filepath'])
+            if img is None:
+                logger.warning(f"Skipping corrupted image: {kf['filepath']}")
                 continue
-                
-            # Resize frame
-            frame = resize_frame(frame, target_width)
-            
-            # Add this frame multiple times to match audio duration
+            img = resize_frame(img, target_width)
             for _ in range(frames_per_image):
-                # Add subtitles if available
-                if subtitles:
-                    # Find current subtitle
-                    current_subtitle = next(
-                        (sub for (start, end, text) in subtitles 
-                         if start <= current_time < end), 
-                        None
-                    )
-                    if current_subtitle:
-                        frame = add_subtitle_to_frame(
-                            frame.copy(), 
-                            current_subtitle[2],  # Subtitle text
-                            (50, height - 50)     # Position at bottom
-                        )
-                
-                out.write(frame)
-                frame_times.append(current_time)
-                current_time += time_per_frame
-        
-        # Release the video writer
+                out.write(img)
         out.release()
-        
-        # Trim audio to match video duration if needed
-        video_duration = len(frame_times) * time_per_frame
-        if audio_duration > video_duration:
-            audio = audio[:int(video_duration * 1000)]
-        
         # Save the trimmed audio
-        temp_audio = os.path.join(processed_dir, f"temp_audio_{video_id}_{cluster_id}.wav")
+        temp_audio = output_path + "_audio.wav"
         audio.export(temp_audio, format="wav")
-        
-        # Combine video and audio using ffmpeg with better quality settings
+        # Use FFmpeg to mux .avi and .wav into .mp4
         cmd = [
-            'ffmpeg',
-            '-y',  # Overwrite output file if it exists
-            '-i', temp_video,  # Input video
-            '-i', temp_audio,   # Input audio
-            '-c:v', 'libx264',
-            '-profile:v', 'main',
-            '-preset', 'medium',
-            '-crf', '23',  # Constant Rate Factor (lower = better quality, 23 is default)
-            '-pix_fmt', 'yuv420p',  # Better compatibility
-            '-c:a', 'aac',
-            '-b:a', '192k',  # Higher audio bitrate
-            '-shortest',
-            '-movflags', '+faststart',  # Enable streaming
-            final_video
+            'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
+            '-c:v', 'libx264', '-profile:v', 'main', '-preset', 'medium',
+            '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+            '-shortest', '-movflags', '+faststart', final_video
         ]
-        
         try:
-            result = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             logger.debug(f"FFmpeg output: {result.stdout}")
-            
             if not os.path.exists(final_video):
                 logger.error(f"Output video not created: {final_video}")
                 return None
-                
-            logger.info(f"Successfully created summary video: {final_video}")
-            return os.path.relpath(final_video, processed_dir)
-            
+            logger.info(f"Successfully created topic summary video: {final_video}")
+            return final_video
         except subprocess.CalledProcessError as e:
             logger.error(f"FFmpeg error: {e.stderr}")
             return None
-            
     except Exception as e:
         logger.error(f"Error in make_summary_video: {str(e)}", exc_info=True)
         return None
-        
     finally:
-        # Clean up temporary files
         for temp_file in [temp_video, temp_audio]:
             try:
                 if temp_file and os.path.exists(temp_file):

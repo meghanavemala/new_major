@@ -13,7 +13,15 @@ import os
 import logging
 import json
 from typing import Dict, List, Optional, Tuple, Union
-from googletrans import Translator, LANGUAGES
+# Optional: Google Translate client (used when available)
+try:
+    from googletrans import Translator, LANGUAGES  # type: ignore
+    GOOGLETRANS_AVAILABLE = True
+except Exception:
+    # If googletrans is not installed or fails to import, we gracefully degrade
+    GOOGLETRANS_AVAILABLE = False
+    Translator = None  # type: ignore
+    LANGUAGES = {}  # type: ignore
 import torch
 from transformers import (
     MarianMTModel, MarianTokenizer, 
@@ -85,6 +93,9 @@ def ensure_cache_dir():
 
 def get_google_translator():
     """Get or create Google Translator instance."""
+    if not GOOGLETRANS_AVAILABLE:
+        logger.warning("googletrans not installed; skipping Google Translate. Install with: pip install googletrans==4.0.0rc1")
+        return None
     if translation_cache['google_translator'] is None:
         try:
             translation_cache['google_translator'] = Translator()
@@ -131,6 +142,8 @@ def translate_with_google(text: str, source_lang: str, target_lang: str) -> Opti
     Returns:
         Translated text or None if failed
     """
+    if not GOOGLETRANS_AVAILABLE:
+        return None
     try:
         translator = get_google_translator()
         if not translator:

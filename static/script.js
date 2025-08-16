@@ -161,7 +161,7 @@ function saveUserPreferences() {
  */
 async function handleFormSubmission(e) {
     e.preventDefault();
-    
+
     // Validate form
     if (!validateForm()) {
         return;
@@ -322,9 +322,9 @@ function resetProcessingSteps() {
     Object.values(PROCESSING_STEPS).forEach(step => {
         if (step.element) {
             step.element.classList.remove('active', 'completed');
-        }
-    });
-}
+                }
+            });
+    }
 
 /**
  * Start tracking processing progress
@@ -394,9 +394,9 @@ function updateProcessingSteps(status, progress) {
             if (step.element && step.progress[1] <= progress) {
                 step.element.classList.add('completed');
                 step.element.classList.remove('active');
-            }
-        });
-    }
+                }
+            });
+        }
 }
 
 /**

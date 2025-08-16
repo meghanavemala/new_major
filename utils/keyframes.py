@@ -1,12 +1,7 @@
 """
 Enhanced Keyframe Extraction and OCR Analysis Module
 
-This module provides comprehensive keyframe extraction with OCR capabilities
-to extract text content from video frames for better context understanding.
-It supports multiple OCR engines and text analysis features.
-
-Author: Video Summarizer Team
-Created: 2024
+This module now extracts more keyframes (lower frame_interval, higher max_keyframes) and stores timestamps for each keyframe, enabling per-topic keyframe selection for summary video generation.
 """
 
 import os
@@ -295,10 +290,11 @@ def extract_keyframes(
     processed_dir: str, 
     video_id: str,
     target_resolution: str = '480p',
-    frame_interval: int = 60,
-    similarity_threshold: float = 0.8,
+    frame_interval: int = 30,  # Lower interval for more keyframes (about 1 per second at 30fps)
+    similarity_threshold: float = 0.4,  # Lower threshold to catch more changes
     ocr_languages: List[str] = ['english'],
-    enable_ocr: bool = True
+    enable_ocr: bool = True,
+    max_keyframes: int = 100  # Higher limit for more keyframes
 ) -> Optional[str]:
     """
     Extract keyframes from video with OCR text analysis.
@@ -316,6 +312,9 @@ def extract_keyframes(
     Returns:
         Path to keyframes directory or None if failed
     """
+    keyframes_dir = None
+    cap = None
+    
     try:
         logger.info(f"Extracting keyframes from {video_path}")
         
@@ -361,6 +360,10 @@ def extract_keyframes(
                 break
             
             if frame_count % frame_interval == 0:  # Extract every Nth frame
+                if saved_count >= max_keyframes:
+                    logger.info(f"Reached maximum keyframe limit ({max_keyframes}), stopping extraction")
+                    break
+                    
                 if prev_frame is None or not _are_frames_similar(frame, prev_frame, similarity_threshold):
                     # Resize frame to target resolution
                     resized_frame = cv2.resize(frame, (target_width, target_height))
@@ -398,10 +401,14 @@ def extract_keyframes(
             frame_count += 1
             
             # Progress logging
-            if frame_count % 1000 == 0:
-                logger.info(f"Processed {frame_count}/{total_frames} frames, saved {saved_count} keyframes")
-        
-        cap.release()
+            if frame_count % 100 == 0:  # More frequent updates
+                progress = (frame_count / total_frames) * 100
+                logger.info(f"Progress: {progress:.1f}% - Processed {frame_count}/{total_frames} frames, saved {saved_count} keyframes")
+                
+                # Early stopping if we have enough keyframes
+                if saved_count >= 50:  # Limit to 50 keyframes for reasonable processing time
+                    logger.info("Reached maximum keyframe limit, stopping extraction")
+                    break
         
         # Save metadata
         metadata_file = os.path.join(keyframes_dir, 'keyframes_metadata.json')
@@ -460,6 +467,9 @@ def extract_keyframes(
     except Exception as e:
         logger.error(f"Error extracting keyframes: {e}")
         return None
+    finally:
+        if 'cap' in locals() and cap is not None:
+            cap.release()
 
 def get_keyframe_text_summary(keyframes_dir: str) -> Dict[str, Any]:
     """
