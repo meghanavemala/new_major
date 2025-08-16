@@ -16,622 +16,498 @@
  * Created: 2024
  */
 
-// Global state management
+// Global variables
 let currentVideoId = null;
-let processingInterval = null;
-let summaryData = null;
+let progressInterval = null;
+let currentTopicIndex = 0;
 
-// DOM element references
-const elements = {
-    form: document.getElementById('main-form'),
-    loader: document.getElementById('loader'),
-    resultContainer: document.getElementById('result-container'),
-    progressPercentage: document.getElementById('progress-percentage'),
-    progressFill: document.getElementById('progress-fill'),
-    processingTitle: document.getElementById('processing-title'),
-    processingMessage: document.getElementById('processing-message'),
-    topicsGrid: document.getElementById('topics-grid'),
-    topicPlayer: document.getElementById('topic-player'),
-    topicVideo: document.getElementById('topic-video'),
-    currentTopicTitle: document.getElementById('current-topic-title'),
-    topicSummaryText: document.getElementById('topic-summary-text'),
-    topicKeywordsList: document.getElementById('topic-keywords-list'),
-    closePlayerBtn: document.getElementById('close-player'),
-    
-    // Form elements
-    sourceLanguage: document.getElementById('source-language'),
-    targetLanguage: document.getElementById('target-language'),
-    voice: document.getElementById('voice'),
-    resolution: document.getElementById('resolution'),
-    summaryLength: document.getElementById('summary_length'),
-    enableOcr: document.getElementById('enable_ocr'),
-    videoUpload: document.getElementById('video-upload'),
-    ytUrl: document.getElementById('yt-url'),
-    
-    // Processing steps
-    stepDownload: document.getElementById('step-download'),
-    stepTranscribe: document.getElementById('step-transcribe'),
-    stepKeyframes: document.getElementById('step-keyframes'),
-    stepAnalyze: document.getElementById('step-analyze'),
-    stepGenerate: document.getElementById('step-generate'),
+// DOM elements
+const uploadSection = document.getElementById('uploadSection');
+const processingSection = document.getElementById('processingSection');
+const resultsSection = document.getElementById('resultsSection');
+const videoForm = document.getElementById('videoForm');
+const submitBtn = document.getElementById('submitBtn');
+const progressPercentage = document.getElementById('progressPercentage');
+const progressMessage = document.getElementById('progressMessage');
+const progressFill = document.getElementById('progressFill');
+const topicsGrid = document.getElementById('topicsGrid');
+const videoPlayerContainer = document.getElementById('videoPlayerContainer');
+const videoPlayer = document.getElementById('videoPlayer');
+const videoTitle = document.getElementById('videoTitle');
+const videoDescription = document.getElementById('videoDescription');
+const downloadButtons = document.getElementById('downloadButtons');
+const errorMessage = document.getElementById('errorMessage');
+const successMessage = document.getElementById('successMessage');
+
+// Step elements
+const steps = {
+    step1: document.getElementById('step1'),
+    step2: document.getElementById('step2'),
+    step3: document.getElementById('step3'),
+    step4: document.getElementById('step4'),
+    step5: document.getElementById('step5')
 };
 
-// Processing step configuration
-const PROCESSING_STEPS = {
-    'downloading': { element: elements.stepDownload, message: 'Downloading video...', progress: [0, 10] },
-    'transcribing': { element: elements.stepTranscribe, message: 'Converting speech to text...', progress: [10, 30] },
-    'extracting': { element: elements.stepKeyframes, message: 'Extracting key frames...', progress: [30, 50] },
-    'clustering': { element: elements.stepAnalyze, message: 'Analyzing content and topics...', progress: [50, 70] },
-    'summarizing': { element: elements.stepAnalyze, message: 'Generating summaries...', progress: [70, 85] },
-    'rendering': { element: elements.stepGenerate, message: 'Creating summary videos...', progress: [85, 95] },
-    'completed': { element: null, message: 'Processing complete!', progress: [95, 100] }
-};
-
-/**
- * Initialize the application when DOM is loaded
- */
+// Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
-    initializeEventListeners();
-    initializeLanguageHandlers();
-    loadUserPreferences();
+    initializeFileUpload();
+    initializeForm();
 });
 
-/**
- * Set up all event listeners for the application
- */
-function initializeEventListeners() {
-    // Form submission
-    elements.form.addEventListener('submit', handleFormSubmission);
-    
-    // File upload handling
-    elements.videoUpload.addEventListener('change', handleFileSelection);
-    
-    // Language change handlers
-    elements.targetLanguage.addEventListener('change', updateVoiceOptions);
-    
-    // Player controls
-    elements.closePlayerBtn.addEventListener('click', closeTopicPlayer);
-    
-    // Download buttons
-    document.getElementById('download-all')?.addEventListener('click', downloadAllSummaries);
-    document.getElementById('download-transcript')?.addEventListener('click', downloadTranscript);
-    document.getElementById('download-keyframes')?.addEventListener('click', downloadKeyframes);
-    
-    // Keyboard shortcuts
-    document.addEventListener('keydown', handleKeyboardShortcuts);
-}
+// File upload functionality
+function initializeFileUpload() {
+    const fileUploadArea = document.getElementById('fileUploadArea');
+    const fileInput = document.getElementById('video_file');
 
-/**
- * Initialize language-specific handlers
- */
-function initializeLanguageHandlers() {
-    // Auto-update voice options when target language changes
-    updateVoiceOptions();
+    fileUploadArea.addEventListener('click', () => fileInput.click());
     
-    // Handle auto-detect language changes
-    elements.sourceLanguage.addEventListener('change', function() {
-        if (this.value === 'auto') {
-            showTooltip(this, 'Language will be automatically detected during processing');
+    fileUploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+        fileUploadArea.classList.add('dragover');
+    });
+    
+    fileUploadArea.addEventListener('dragleave', () => {
+        fileUploadArea.classList.remove('dragover');
+    });
+    
+    fileUploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        fileUploadArea.classList.remove('dragover');
+        
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            updateFileUploadDisplay(e.dataTransfer.files[0]);
+        }
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            console.log('File selected:', e.target.files[0].name, e.target.files[0].size);
+            updateFileUploadDisplay(e.target.files[0]);
         }
     });
 }
 
-/**
- * Load user preferences from localStorage
- */
-function loadUserPreferences() {
-    const preferences = JSON.parse(localStorage.getItem('videoSummarizerPrefs') || '{}');
+function updateFileUploadDisplay(file) {
+    const fileUploadArea = document.getElementById('fileUploadArea');
+    const uploadIcon = fileUploadArea.querySelector('.upload-icon');
+    const uploadText = fileUploadArea.querySelector('.upload-text');
+    const uploadHint = fileUploadArea.querySelector('.upload-hint');
     
-    if (preferences.targetLanguage) {
-        elements.targetLanguage.value = preferences.targetLanguage;
-    }
-    if (preferences.voice) {
-        elements.voice.value = preferences.voice;
-    }
-    if (preferences.resolution) {
-        elements.resolution.value = preferences.resolution;
-    }
-    if (preferences.summaryLength) {
-        elements.summaryLength.value = preferences.summaryLength;
-    }
-    if (preferences.enableOcr !== undefined) {
-        elements.enableOcr.checked = preferences.enableOcr;
-    }
-    
-    updateVoiceOptions();
+    uploadIcon.innerHTML = '<i class="fas fa-file-video"></i>';
+    uploadText.textContent = file.name;
+    uploadHint.textContent = `Size: ${(file.size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-/**
- * Save user preferences to localStorage
- */
-function saveUserPreferences() {
-    const preferences = {
-        targetLanguage: elements.targetLanguage.value,
-        voice: elements.voice.value,
-        resolution: elements.resolution.value,
-        summaryLength: elements.summaryLength.value,
-        enableOcr: elements.enableOcr.checked
-    };
-    
-    localStorage.setItem('videoSummarizerPrefs', JSON.stringify(preferences));
-}
-
-/**
- * Handle form submission for video processing
- */
-async function handleFormSubmission(e) {
+// Form submission
+function initializeForm() {
+    videoForm.addEventListener('submit', async function(e) {
     e.preventDefault();
 
-    // Validate form
-    if (!validateForm()) {
-        return;
-    }
-    
-    // Save user preferences
-    saveUserPreferences();
-    
-    // Prepare form data
-    const formData = new FormData(elements.form);
-    
-    // Show processing UI
-    showProcessingUI();
-    
-    try {
-        // Submit form
-        const response = await fetch('/api/process', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const data = await response.json();
-        
-        if (data.video_id) {
-            currentVideoId = data.video_id;
-            startProgressTracking();
-        } else {
-            throw new Error(data.error || 'Failed to start processing');
+        if (!validateForm()) {
+            return;
         }
         
-    } catch (error) {
-        showError('Failed to start processing: ' + error.message);
-        resetUI();
+        await submitForm();
+    });
+    
+    // Add test upload button event listener
+    const testUploadBtn = document.getElementById('testUploadBtn');
+    if (testUploadBtn) {
+        testUploadBtn.addEventListener('click', testUpload);
     }
 }
 
-/**
- * Validate form before submission
- */
 function validateForm() {
-    const hasVideo = elements.videoUpload.files.length > 0;
-    const hasUrl = elements.ytUrl.value.trim() !== '';
+    const ytUrl = document.getElementById('yt_url').value.trim();
+    const videoFile = document.getElementById('video_file').files[0];
     
-    if (!hasVideo && !hasUrl) {
-        showError('Please upload a video file or provide a YouTube URL');
+    console.log('Validation - ytUrl:', ytUrl);
+    console.log('Validation - videoFile:', videoFile);
+    
+    if (!ytUrl && !videoFile) {
+        showError('Please provide either a YouTube URL or upload a video file.');
         return false;
     }
     
-    if (hasVideo && hasUrl) {
-        showError('Please provide either a video file OR a YouTube URL, not both');
+    if (videoFile && videoFile.size > 40 * 1024 * 1024) {
+        showError('Video file size must be less than 40MB.');
         return false;
-    }
-    
-    // Validate file size if uploading
-    if (hasVideo) {
-        const file = elements.videoUpload.files[0];
-        const maxSize = 100 * 1024 * 1024; // 100MB
-        
-        if (file.size > maxSize) {
-            showError('File size must be less than 100MB');
-            return false;
-        }
-    }
-    
-    // Validate YouTube URL format
-    if (hasUrl) {
-        const ytUrlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+/;
-        if (!ytUrlPattern.test(elements.ytUrl.value.trim())) {
-            showError('Please provide a valid YouTube URL');
-            return false;
-        }
     }
     
     return true;
 }
 
-/**
- * Handle file selection for upload
- */
-function handleFileSelection(e) {
-    const file = e.target.files[0];
-    if (file) {
-        // Clear YouTube URL if file is selected
-        elements.ytUrl.value = '';
+async function submitForm() {
+    try {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
         
-        // Update UI to show selected file
-        const label = document.querySelector('.upload-label span');
-        label.textContent = `Selected: ${file.name}`;
-        label.parentElement.classList.add('file-selected');
+        const formData = new FormData(videoForm);
+        
+        // Ensure the file is properly attached to FormData
+        const videoFile = document.getElementById('video_file').files[0];
+        if (videoFile) {
+            // Remove any existing entry and add the file
+            formData.delete('video_file');
+            formData.append('video_file', videoFile);
+            console.log('File attached to FormData:', videoFile.name, videoFile.size);
+        } else {
+            console.log('No file found in video_file input');
+        }
+        
+        // Debug logging
+        console.log('Form data contents:');
+        for (let [key, value] of formData.entries()) {
+            if (value instanceof File) {
+                console.log(`${key}: File - ${value.name} (${value.size} bytes)`);
+            } else {
+                console.log(`${key}: ${value}`);
+            }
+        }
+        
+        const response = await fetch('/api/process', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            throw new Error(result.error);
+        }
+        
+        currentVideoId = result.video_id;
+        showProcessingSection();
+        startProgressTracking();
+        
+    } catch (error) {
+        console.error('Error submitting form:', error);
+        showError(`Error: ${error.message}`);
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-play"></i> Start Processing';
     }
 }
 
-/**
- * Update voice options based on selected target language
- */
-function updateVoiceOptions() {
-    const targetLang = elements.targetLanguage.value;
-    const voiceSelect = elements.voice;
-    
-    // Clear existing options except auto
-    while (voiceSelect.children.length > 1) {
-        voiceSelect.removeChild(voiceSelect.lastChild);
+// Test upload functionality
+async function testUpload() {
+    try {
+        const testBtn = document.getElementById('testUploadBtn');
+        testBtn.disabled = true;
+        testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
+        
+        const formData = new FormData();
+        
+        // Get the video file
+        const videoFile = document.getElementById('video_file').files[0];
+        if (!videoFile) {
+            showError('Please select a video file first.');
+            testBtn.disabled = false;
+            testBtn.innerHTML = '<i class="fas fa-bug"></i> Test Upload';
+            return;
+        }
+        
+        // Add the file to FormData
+        formData.append('video_file', videoFile);
+        
+        console.log('Test upload - File being sent:', videoFile.name, videoFile.size);
+        
+        const response = await fetch('/api/test-upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showSuccess(`Test successful! File: ${result.filename}, Size: ${(result.size / 1024 / 1024).toFixed(2)} MB`);
+            console.log('Test upload result:', result);
+        } else {
+            showError(`Test failed: ${result.error}`);
+            console.error('Test upload error:', result);
+        }
+        
+    } catch (error) {
+        console.error('Error in test upload:', error);
+        showError(`Test error: ${error.message}`);
+    } finally {
+        const testBtn = document.getElementById('testUploadBtn');
+        testBtn.disabled = false;
+        testBtn.innerHTML = '<i class="fas fa-bug"></i> Test Upload';
     }
-    
-    // Voice mapping for different languages
-    const voiceOptions = {
-        'english': [
-            { value: 'en-US-Standard-A', text: '🇺🇸 US English (Male)' },
-            { value: 'en-US-Standard-C', text: '🇺🇸 US English (Female)' },
-            { value: 'en-GB-Standard-A', text: '🇬🇧 British English (Female)' },
-            { value: 'en-AU-Standard-A', text: '🇦🇺 Australian English (Female)' }
-        ],
-        'hindi': [
-            { value: 'hi-IN-Standard-A', text: '🇮🇳 Hindi (Female)' },
-            { value: 'hi-IN-Standard-B', text: '🇮🇳 Hindi (Male)' }
-        ],
-        'bengali': [
-            { value: 'bn-IN-Standard-A', text: '🇮🇳 Bengali (Female)' },
-            { value: 'bn-IN-Standard-B', text: '🇮🇳 Bengali (Male)' }
-        ],
-        'tamil': [
-            { value: 'ta-IN-Standard-A', text: '🇮🇳 Tamil (Female)' },
-            { value: 'ta-IN-Standard-B', text: '🇮🇳 Tamil (Male)' }
-        ],
-        // Add more languages as needed
-    };
-    
-    // Add language-specific voices
-    const voices = voiceOptions[targetLang] || [
-        { value: 'auto-' + targetLang, text: `🎯 Best ${targetLang.charAt(0).toUpperCase() + targetLang.slice(1)} Voice` }
-    ];
-    
-    voices.forEach(voice => {
-        const option = document.createElement('option');
-        option.value = voice.value;
-        option.textContent = voice.text;
-        voiceSelect.appendChild(option);
-    });
 }
 
-/**
- * Show processing UI and hide form
- */
-function showProcessingUI() {
-    elements.form.parentElement.style.display = 'none';
-    elements.loader.classList.remove('hidden');
-    elements.resultContainer.classList.add('hidden');
-    
-    // Reset processing steps
-    resetProcessingSteps();
-    updateProgress(0, 'Initializing...');
-}
-
-/**
- * Reset all processing step indicators
- */
-function resetProcessingSteps() {
-    Object.values(PROCESSING_STEPS).forEach(step => {
-        if (step.element) {
-            step.element.classList.remove('active', 'completed');
-                }
-            });
-    }
-
-/**
- * Start tracking processing progress
- */
+// Progress tracking
 function startProgressTracking() {
-    if (processingInterval) {
-        clearInterval(processingInterval);
+    if (progressInterval) {
+        clearInterval(progressInterval);
     }
     
-    processingInterval = setInterval(async () => {
+    progressInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${currentVideoId}`);
-            const status = await response.json();
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             
-            updateProcessingStatus(status);
+            const status = await response.json();
+            updateProgress(status);
             
             if (status.status === 'completed') {
-                clearInterval(processingInterval);
-                processingInterval = null;
+                clearInterval(progressInterval);
                 showResults(status);
             } else if (status.status === 'error') {
-                clearInterval(processingInterval);
-                processingInterval = null;
-                showError(status.error || 'Processing failed');
-                resetUI();
+                clearInterval(progressInterval);
+                showError(`Processing failed: ${status.error}`);
+                showUploadSection();
             }
             
         } catch (error) {
             console.error('Error checking status:', error);
         }
-    }, 2000); // Check every 2 seconds
+    }, 1000);
 }
 
-/**
- * Update processing status display
- */
-function updateProcessingStatus(status) {
-    const progress = Math.min(status.progress || 0, 100);
+function updateProgress(status) {
+    const progress = status.progress || 0;
     const message = status.message || 'Processing...';
-    const currentStatus = status.status || 'processing';
     
-    updateProgress(progress, message);
-    updateProcessingSteps(currentStatus, progress);
-}
-
-/**
- * Update progress bar and percentage
- */
-function updateProgress(percentage, message) {
-    elements.progressPercentage.textContent = `${Math.round(percentage)}%`;
-    elements.progressFill.style.width = `${percentage}%`;
-    elements.processingMessage.textContent = message;
-}
-
-/**
- * Update processing step indicators
- */
-function updateProcessingSteps(status, progress) {
-    const stepConfig = PROCESSING_STEPS[status];
+    progressPercentage.textContent = `${progress}%`;
+    progressMessage.textContent = message;
+    progressFill.style.width = `${progress}%`;
     
-    if (stepConfig && stepConfig.element) {
-        // Mark current step as active
-        stepConfig.element.classList.add('active');
-        
-        // Mark previous steps as completed
-        Object.values(PROCESSING_STEPS).forEach(step => {
-            if (step.element && step.progress[1] <= progress) {
-                step.element.classList.add('completed');
-                step.element.classList.remove('active');
-                }
-            });
-        }
+    // Update step status based on progress
+    updateStepStatus(progress);
 }
 
-/**
- * Show results after processing completion
- */
+function updateStepStatus(progress) {
+    // Reset all steps
+    Object.values(steps).forEach(step => {
+        step.className = 'step pending';
+    });
+    
+    // Update steps based on progress
+    if (progress >= 5) {
+        steps.step1.className = 'step completed';
+    }
+    if (progress >= 20) {
+        steps.step2.className = 'step completed';
+    }
+    if (progress >= 40) {
+        steps.step3.className = 'step completed';
+    }
+    if (progress >= 55) {
+        steps.step4.className = 'step completed';
+    }
+    if (progress >= 80) {
+        steps.step5.className = 'step active';
+    }
+    if (progress >= 100) {
+        steps.step5.className = 'step completed';
+    }
+}
+
+// Section visibility
+function showProcessingSection() {
+    uploadSection.style.display = 'none';
+    processingSection.style.display = 'block';
+    resultsSection.style.display = 'none';
+    hideMessages();
+}
+
 function showResults(data) {
-    elements.loader.classList.add('hidden');
-    elements.resultContainer.classList.remove('hidden');
+    uploadSection.style.display = 'none';
+    processingSection.style.display = 'none';
+    resultsSection.style.display = 'block';
     
-    summaryData = data;
+    // Store video data globally for access in other functions
+    window.currentVideoData = data;
     
-    // Populate topics grid
-    populateTopicsGrid(data.summaries, data.keywords);
-    
-    // Show success message
+    populateTopics(data);
+    populateDownloadButtons(data);
     showSuccess('Video processing completed successfully!');
 }
 
-/**
- * Populate the topics grid with available topics
- */
-function populateTopicsGrid(summaries, keywords) {
-    elements.topicsGrid.innerHTML = '';
+function showUploadSection() {
+    uploadSection.style.display = 'block';
+    processingSection.style.display = 'none';
+    resultsSection.style.display = 'none';
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<i class="fas fa-play"></i> Start Processing';
+}
+
+// Populate results
+function populateTopics(data) {
+    topicsGrid.innerHTML = '';
     
-    summaries.forEach((summary, index) => {
-        const topicCard = createTopicCard(index, summary, keywords[index] || []);
-        elements.topicsGrid.appendChild(topicCard);
+    if (!data.summaries || data.summaries.length === 0) {
+        topicsGrid.innerHTML = '<p class="text-center">No topics found.</p>';
+        return;
+    }
+    
+    data.summaries.forEach((summary, index) => {
+        const topicCard = createTopicCard(summary, data.keywords[index], index, data);
+        topicsGrid.appendChild(topicCard);
     });
 }
 
-/**
- * Create a topic card element
- */
-function createTopicCard(index, summary, topicKeywords) {
+function createTopicCard(summary, keywords, index, data) {
     const card = document.createElement('div');
     card.className = 'topic-card';
-    card.setAttribute('data-topic-index', index);
+    card.dataset.topicIndex = index;
     
-    // Generate topic title from keywords or use default
-    const topicTitle = topicKeywords.length > 0 
-        ? topicKeywords.slice(0, 3).join(', ')
-        : `Topic ${index + 1}`;
+    const keywordsHtml = keywords ? keywords.map(kw => `<span class="keyword-tag">${kw}</span>`).join('') : '';
     
     card.innerHTML = `
         <div class="topic-header">
-            <h4><i class="fas fa-play-circle"></i> ${topicTitle}</h4>
-            <span class="topic-duration">${estimateDuration(summary)}</span>
+            <div class="topic-number">${index + 1}</div>
+            <div class="topic-title">Topic ${index + 1}</div>
         </div>
-        <div class="topic-preview">
-            <p>${truncateText(summary, 100)}</p>
+        <div class="topic-summary">${summary}</div>
+        <div class="topic-keywords">${keywordsHtml}</div>
+        <div class="topic-actions">
+            <button class="btn btn-sm" onclick="playTopic(${index})">
+                <i class="fas fa-play"></i> Play Summary
+            </button>
+            <button class="btn btn-sm btn-secondary" onclick="downloadTopic(${index})">
+                <i class="fas fa-download"></i> Download
+            </button>
         </div>
-        <div class="topic-keywords">
-            ${topicKeywords.slice(0, 5).map(keyword => 
-                `<span class="keyword-tag">${keyword}</span>`
-            ).join('')}
-        </div>
-        <button class="play-topic-btn" onclick="playTopic(${index})">
-            <i class="fas fa-play"></i> Play Summary
-        </button>
     `;
+    
+    card.addEventListener('click', (e) => {
+        if (!e.target.closest('button')) {
+            playTopic(index);
+        }
+    });
     
     return card;
 }
 
-/**
- * Play a specific topic summary
- */
-function playTopic(topicIndex) {
-    if (!summaryData || !summaryData.summary_videos[topicIndex]) {
-        showError('Topic video not available');
+function populateDownloadButtons(data) {
+    downloadButtons.innerHTML = '';
+    
+    if (!data.summary_videos || data.summary_videos.length === 0) {
+        downloadButtons.innerHTML = '<p>No videos available for download.</p>';
         return;
     }
     
-    const summary = summaryData.summaries[topicIndex];
-    const keywords = summaryData.keywords[topicIndex] || [];
-    const videoPath = summaryData.summary_videos[topicIndex];
-    
-    // Update topic player
-    elements.currentTopicTitle.textContent = keywords.length > 0 
-        ? keywords.slice(0, 3).join(', ')
-        : `Topic ${topicIndex + 1}`;
-    
-    elements.topicSummaryText.textContent = summary;
-    
-    // Populate keywords
-    elements.topicKeywordsList.innerHTML = keywords
-        .map(keyword => `<span class="keyword-tag">${keyword}</span>`)
-        .join('');
-    
-    // Set video source
-    elements.topicVideo.src = `/api/stream/${currentVideoId}/${topicIndex}`;
-    
-    // Show player
-    elements.topicPlayer.classList.remove('hidden');
-    
-    // Scroll to player
-    elements.topicPlayer.scrollIntoView({ behavior: 'smooth' });
-}
-
-/**
- * Close the topic player
- */
-function closeTopicPlayer() {
-    elements.topicPlayer.classList.add('hidden');
-    elements.topicVideo.pause();
-    elements.topicVideo.src = '';
-}
-
-/**
- * Download all summaries as a ZIP file
- */
-function downloadAllSummaries() {
-    if (!currentVideoId) return;
-    
-    // Create download link
-    const link = document.createElement('a');
-    link.href = `/api/download/all/${currentVideoId}`;
-    link.download = `video_summaries_${currentVideoId}.zip`;
-    link.click();
-}
-
-/**
- * Download transcript file
- */
-function downloadTranscript() {
-    if (!currentVideoId) return;
-    
-    const link = document.createElement('a');
-    link.href = `/srt/${currentVideoId}`;
-    link.download = `transcript_${currentVideoId}.srt`;
-    link.click();
-}
-
-/**
- * Download keyframes
- */
-function downloadKeyframes() {
-    if (!currentVideoId) return;
-    
-    const link = document.createElement('a');
-    link.href = `/api/download/keyframes/${currentVideoId}`;
-    link.download = `keyframes_${currentVideoId}.zip`;
-    link.click();
-}
-
-/**
- * Handle keyboard shortcuts
- */
-function handleKeyboardShortcuts(e) {
-    // Escape key to close player
-    if (e.key === 'Escape' && !elements.topicPlayer.classList.contains('hidden')) {
-        closeTopicPlayer();
-    }
-    
-    // Space key to play/pause current video
-    if (e.key === ' ' && !elements.topicPlayer.classList.contains('hidden')) {
-        e.preventDefault();
-        if (elements.topicVideo.paused) {
-            elements.topicVideo.play();
-        } else {
-            elements.topicVideo.pause();
+    data.summary_videos.forEach((videoPath, index) => {
+        if (videoPath) {
+            const downloadBtn = document.createElement('a');
+            downloadBtn.href = `/processed/${videoPath}`;
+            downloadBtn.className = 'btn btn-secondary';
+            downloadBtn.download = `topic_${index + 1}_summary.mp4`;
+            downloadBtn.innerHTML = `<i class="fas fa-download"></i> Topic ${index + 1}`;
+            downloadButtons.appendChild(downloadBtn);
         }
+    });
+}
+
+// Topic interaction
+function playTopic(topicIndex) {
+    // Update active topic card
+    document.querySelectorAll('.topic-card').forEach(card => {
+        card.classList.remove('active');
+    });
+    
+    const activeCard = document.querySelector(`[data-topic-index="${topicIndex}"]`);
+    if (activeCard) {
+        activeCard.classList.add('active');
     }
+    
+    currentTopicIndex = topicIndex;
+    
+    // Check if video exists for this topic
+    if (!window.currentVideoData || !window.currentVideoData.summary_videos || !window.currentVideoData.summary_videos[topicIndex]) {
+        showError('Video for this topic is not available.');
+        return;
+    }
+    
+    // Update video player with organized path
+    const videoPath = `/processed/${window.currentVideoData.summary_videos[topicIndex]}`;
+    videoPlayer.src = videoPath;
+    
+    // Update video info with topic details
+    const topicData = window.currentVideoData.clusters?.[topicIndex];
+    if (topicData) {
+        videoTitle.textContent = `Topic ${topicIndex + 1}: ${topicData.keywords?.slice(0, 3).join(', ') || 'Summary'}`;
+        videoDescription.textContent = topicData.summary || 'Click play to start watching the summary video.';
+    } else {
+        videoTitle.textContent = `Topic ${topicIndex + 1} Summary`;
+        videoDescription.textContent = 'Click play to start watching the summary video.';
+    }
+    
+    // Show video player
+    videoPlayerContainer.style.display = 'block';
+    
+    // Load video metadata
+    videoPlayer.load();
 }
 
-/**
- * Utility Functions
- */
-
-function truncateText(text, maxLength) {
-    return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+function downloadTopic(topicIndex) {
+    if (!window.currentVideoData || !window.currentVideoData.summary_videos || !window.currentVideoData.summary_videos[topicIndex]) {
+        showError('Video for this topic is not available for download.');
+        return;
+    }
+    
+    const videoPath = `/processed/${window.currentVideoData.summary_videos[topicIndex]}`;
+    const link = document.createElement('a');
+    link.href = videoPath;
+    link.download = `topic_${topicIndex + 1}_summary.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showSuccess(`Downloading topic ${topicIndex + 1} summary video...`);
 }
 
-function estimateDuration(text) {
-    // Rough estimate: 150 words per minute for speech
-    const words = text.split(' ').length;
-    const minutes = Math.ceil(words / 150);
-    return `~${minutes} min`;
-}
-
+// Utility functions
 function showError(message) {
-    showNotification(message, 'error');
-}
-
-function showSuccess(message) {
-    showNotification(message, 'success');
-}
-
-function showNotification(message, type = 'info') {
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.innerHTML = `
-        <i class="fas fa-${type === 'error' ? 'exclamation-circle' : type === 'success' ? 'check-circle' : 'info-circle'}"></i>
-        <span>${message}</span>
-        <button class="close-notification" onclick="this.parentElement.remove()">
-            <i class="fas fa-times"></i>
-        </button>
-    `;
-    
-    // Add to page
-    document.body.appendChild(notification);
-    
-    // Auto-remove after 5 seconds
+    errorMessage.textContent = message;
+    errorMessage.style.display = 'block';
     setTimeout(() => {
-        if (notification.parentElement) {
-            notification.remove();
-        }
+        errorMessage.style.display = 'none';
     }, 5000);
 }
 
-function showTooltip(element, message) {
-    // Simple tooltip implementation
-    const tooltip = document.createElement('div');
-    tooltip.className = 'tooltip';
-    tooltip.textContent = message;
-    document.body.appendChild(tooltip);
-    
-    const rect = element.getBoundingClientRect();
-    tooltip.style.left = rect.left + 'px';
-    tooltip.style.top = (rect.bottom + 5) + 'px';
-    
-    setTimeout(() => tooltip.remove(), 3000);
+function showSuccess(message) {
+    successMessage.textContent = message;
+    successMessage.style.display = 'block';
+    setTimeout(() => {
+        successMessage.style.display = 'none';
+    }, 5000);
 }
 
-function resetUI() {
-    elements.form.parentElement.style.display = 'block';
-    elements.loader.classList.add('hidden');
-    elements.resultContainer.classList.add('hidden');
-    
-    if (processingInterval) {
-        clearInterval(processingInterval);
-        processingInterval = null;
-    }
-    
-    currentVideoId = null;
-    summaryData = null;
+function hideMessages() {
+    errorMessage.style.display = 'none';
+    successMessage.style.display = 'none';
 }
+
+// Reset functionality
+function resetForm() {
+    videoForm.reset();
+    document.getElementById('fileUploadArea').innerHTML = `
+        <div class="upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+        <div class="upload-text">Click to upload or drag & drop</div>
+        <div class="upload-hint">MP4, AVI, MOV, MKV, WEBM (Max 40MB)</div>
+    `;
+    showUploadSection();
+}
+
+// Add reset button functionality
+document.addEventListener('DOMContentLoaded', function() {
+    // Add reset button to the form
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'btn btn-secondary';
+    resetBtn.innerHTML = '<i class="fas fa-redo"></i> Reset';
+    resetBtn.onclick = resetForm;
+    
+    const submitGroup = submitBtn.parentElement;
+    submitGroup.appendChild(resetBtn);
+});

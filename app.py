@@ -12,11 +12,12 @@ from flask import (
     send_from_directory, session, Response, stream_with_context
 )
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
 # Import utility modules
 from utils.downloader import handle_video_upload_or_download, is_youtube_url
 from utils.transcriber import transcribe_video, SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
-from utils.keyframes import extract_keyframes, get_keyframe_text_summary
+from utils.keyframes import extract_keyframes, get_keyframe_text_summary, extract_keyframes_for_time_range
 from utils.clustering import cluster_segments, extract_keywords
 from utils.summarizer import summarize_cluster
 from utils.tts import text_to_speech, SUPPORTED_VOICES, get_available_voices
@@ -36,10 +37,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
-
 # Configuration
 CONFIG = {
     'UPLOAD_DIR': 'uploads',
@@ -52,6 +49,11 @@ CONFIG = {
     'DEFAULT_RESOLUTION': '480p',
     'ENABLE_DARK_MODE': True,
 }
+
+# Initialize Flask app
+app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
+app.config['MAX_CONTENT_LENGTH'] = CONFIG['MAX_CONTENT_LENGTH']
 # Ensure directories exist
 for dir_path in [CONFIG['UPLOAD_DIR'], CONFIG['PROCESSED_DIR']]:
     os.makedirs(dir_path, exist_ok=True)
@@ -80,6 +82,11 @@ def update_processing_status(video_id: str, status: str, progress: int, message:
         'error': error,
         'last_updated': time.time()
     })
+
+@app.route('/test')
+def test():
+    """Simple test route to verify the app is working."""
+    return jsonify({'status': 'ok', 'message': 'Flask app is running'})
 
 @app.route('/')
 def index():
@@ -124,13 +131,38 @@ from flask import copy_current_request_context
 def process():
     """Handle video processing request with enhanced language support."""
     # Get request data
-    video_url = request.form.get('yt_url', '').strip()
     source_language = request.form.get('source_language', 'auto')
     target_language = request.form.get('target_language', 'english')
     voice = request.form.get('voice', CONFIG['DEFAULT_VOICE'])
     resolution = request.form.get('resolution', CONFIG['DEFAULT_RESOLUTION'])
     summary_length = request.form.get('summary_length', 'medium')
     enable_ocr = request.form.get('enable_ocr', 'true').lower() == 'true'
+    
+    # Validate input (either video file or YouTube URL must be provided)
+    video_file = request.files.get('video_file')
+    yt_url = request.form.get('yt_url', '').strip()
+    
+    # Debug logging
+    logger.info(f"Received video_file: {video_file}")
+    logger.info(f"Received yt_url: {yt_url}")
+    logger.info(f"All form fields: {list(request.form.keys())}")
+    logger.info(f"All files: {list(request.files.keys())}")
+    logger.info(f"Request content type: {request.content_type}")
+    logger.info(f"Request content length: {request.content_length}")
+    
+    # Check if video_file exists and has content
+    if video_file:
+        logger.info(f"Video file details - filename: {video_file.filename}, content_type: {video_file.content_type}")
+        if video_file.filename:
+            logger.info(f"Video file has filename: {video_file.filename}")
+        else:
+            logger.info("Video file exists but has no filename")
+    else:
+        logger.info("No video_file in request.files")
+    
+    if not video_file and not yt_url:
+        logger.error("Validation failed: No video file or YouTube URL provided")
+        return jsonify({'error': 'Please provide either a video file or a YouTube URL'}), 400
     
     # Validate languages
     if source_language != 'auto' and source_language not in TRANSCRIBE_LANGS:
@@ -222,11 +254,16 @@ def process():
                 if segments and ocr_context.strip():
                     segments[0]['text'] += f" [Visual context: {ocr_context}]"
             
+            # Improved clustering with better parameters
+            n_clusters = min(6, max(3, len(segments) // 8))  # Better cluster count
+            
             clustered = cluster_segments(
                 segments,
-                language=target_language,  # Use target language for clustering
-                method='lda',  # or 'nmf', 'kmeans', 'dbscan'
-                n_clusters=min(5, max(2, len(segments) // 10))  # Dynamic cluster count
+                language=target_language,
+                method='kmeans',  # More efficient than LDA for this use case
+                n_clusters=n_clusters,
+                min_cluster_size=3,  # Ensure meaningful clusters
+                similarity_threshold=0.7  # Higher threshold for better separation
             )
             
             # 5. Process each cluster
@@ -269,11 +306,44 @@ def process():
                 )
                 tts_paths.append(tts_path)
             
-            # 6. Create summary videos
+            # 6. Create summary videos with better organization
             summary_videos = []
-            # Load keyframe metadata
+            
+            # Create structured folders for this video
+            video_base_dir = os.path.join(CONFIG['PROCESSED_DIR'], video_id)
+            os.makedirs(video_base_dir, exist_ok=True)
+            
+            # Create subdirectories
+            keyframes_dir_organized = os.path.join(video_base_dir, 'keyframes')
+            audio_dir = os.path.join(video_base_dir, 'audio')
+            videos_dir = os.path.join(video_base_dir, 'videos')
+            os.makedirs(keyframes_dir_organized, exist_ok=True)
+            os.makedirs(audio_dir, exist_ok=True)
+            os.makedirs(videos_dir, exist_ok=True)
+            
+            # Load and organize keyframe metadata
             with open(os.path.join(keyframes_dir, 'keyframes_metadata.json'), 'r', encoding='utf-8') as f:
                 keyframe_metadata = json.load(f)['keyframes']
+            
+            # Copy keyframes to organized directory and update paths
+            for kf in keyframe_metadata:
+                if os.path.exists(kf['filepath']):
+                    new_path = os.path.join(keyframes_dir_organized, os.path.basename(kf['filepath']))
+                    import shutil
+                    shutil.copy2(kf['filepath'], new_path)
+                    kf['filepath'] = new_path
+            
+            # Save organized metadata
+            organized_metadata_path = os.path.join(video_base_dir, 'metadata.json')
+            with open(organized_metadata_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'video_id': video_id,
+                    'keyframes': keyframe_metadata,
+                    'segments': segments,
+                    'clusters': [{'segments': cluster, 'keywords': keywords} for cluster, keywords in zip(clustered, cluster_keywords)]
+                }, f, indent=2, ensure_ascii=False)
+            
+            # Process each cluster with more keyframes
             for cluster_id, (tts_path, keywords, cluster) in enumerate(zip(tts_paths, cluster_keywords, clustered)):
                 update_processing_status(
                     video_id,
@@ -281,19 +351,61 @@ def process():
                     80 + (15 * cluster_id // len(tts_paths)),
                     f'Creating video for topic {cluster_id + 1}...'
                 )
+                
                 # Get topic start/end times from cluster segments
                 topic_start = min(seg['start'] for seg in cluster)
                 topic_end = max(seg['end'] for seg in cluster)
+                
+                # Extract more keyframes for this topic (at least 30-40 for smooth video feel)
                 topic_keyframes = select_keyframes_for_topic(keyframe_metadata, topic_start, topic_end)
-                output_path = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}_summary_{cluster_id}")
+                
+                # If we don't have enough keyframes, extract more from the video for this time range
+                if len(topic_keyframes) < 30:
+                    additional_keyframes = extract_keyframes_for_time_range(
+                        video_path, topic_start, topic_end, 30 - len(topic_keyframes)
+                    )
+                    topic_keyframes.extend(additional_keyframes)
+                
+                # Move TTS audio to organized directory
+                audio_filename = f"topic_{cluster_id}_summary.wav"
+                organized_audio_path = os.path.join(audio_dir, audio_filename)
+                import shutil
+                shutil.copy2(tts_path, organized_audio_path)
+                
+                # Create video
+                output_path = os.path.join(videos_dir, f"topic_{cluster_id}_summary")
                 video_out = make_summary_video(
                     keyframes=topic_keyframes,
-                    tts_audio_path=tts_path,
+                    tts_audio_path=organized_audio_path,
                     output_path=output_path,
                     target_width=854,
                     fps=30
                 )
-                summary_videos.append(video_out)
+                
+                if video_out:
+                    # Store the relative path from processed directory
+                    video_filename = os.path.relpath(video_out, CONFIG['PROCESSED_DIR'])
+                    summary_videos.append(video_filename)
+                    
+                    # Update metadata with topic-specific info
+                    topic_metadata = {
+                        'topic_id': cluster_id,
+                        'start_time': topic_start,
+                        'end_time': topic_end,
+                        'summary': summaries[cluster_id],
+                        'keywords': keywords,
+                        'keyframes_count': len(topic_keyframes),
+                        'audio_file': audio_filename,
+                        'video_file': video_filename
+                    }
+                    
+                    # Save topic metadata
+                    topic_metadata_path = os.path.join(video_base_dir, f'topic_{cluster_id}_metadata.json')
+                    with open(topic_metadata_path, 'w', encoding='utf-8') as f:
+                        json.dump(topic_metadata, f, indent=2, ensure_ascii=False)
+                else:
+                    logger.error(f"Failed to create video for topic {cluster_id}")
+                    summary_videos.append(None)
             
             # 7. Finalize with enhanced metadata
             result = {
@@ -319,6 +431,15 @@ def process():
             # Update status with result
             processing_status[video_id].update(result)
             
+            # Mark processing as complete
+            update_processing_status(
+                video_id,
+                'completed',
+                100,
+                'Processing complete!',
+                None
+            )
+            
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}\n{traceback.format_exc()}")
             update_processing_status(
@@ -342,6 +463,36 @@ def process():
         'progress': 0,
         'message': 'Processing started'
     })
+
+@app.route('/api/test-upload', methods=['POST'])
+def test_upload():
+    """Test endpoint to debug file upload issues."""
+    logger.info(f"Test upload - files: {list(request.files.keys())}")
+    logger.info(f"Test upload - form: {list(request.form.keys())}")
+    logger.info(f"Test upload - content type: {request.content_type}")
+    logger.info(f"Test upload - content length: {request.content_length}")
+    
+    if 'video_file' in request.files:
+        f = request.files['video_file']
+        if f and f.filename:
+            # Read the file content to get size
+            f.seek(0, 2)  # Seek to end
+            file_size = f.tell()
+            f.seek(0)  # Reset to beginning
+            
+            logger.info(f"Test upload - received file: {f.filename}, size: {file_size}")
+            return jsonify({
+                'success': True, 
+                'filename': f.filename,
+                'size': file_size,
+                'content_type': f.content_type
+            })
+        else:
+            logger.warning("Test upload - video_file exists but is empty or has no filename")
+            return jsonify({'success': False, 'error': 'File is empty or has no filename'})
+    else:
+        logger.warning("Test upload - no video_file in request.files")
+        return jsonify({'success': False, 'error': 'No video_file received in request.files'})
 
 @app.route('/api/status/<video_id>')
 def get_status(video_id: str):

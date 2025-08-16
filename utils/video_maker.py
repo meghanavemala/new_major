@@ -125,6 +125,11 @@ def make_summary_video(
         n_keyframes = len(keyframes)
         frame_duration = audio_duration / n_keyframes if n_keyframes > 0 else 1.0
         frames_per_image = max(1, int(frame_duration * fps))
+        
+        # Ensure smooth transitions by limiting frames per image
+        max_frames_per_image = max(1, int(audio_duration * fps / 30))  # Max 30 keyframes for smooth video
+        frames_per_image = min(frames_per_image, max_frames_per_image)
+        
         # Write frames
         for kf in keyframes:
             img = cv2.imread(kf['filepath'])

@@ -24,8 +24,8 @@ def is_youtube_url(url: str) -> bool:
 
 def handle_video_upload_or_download(request, upload_dir):
     video_id = str(uuid.uuid4())
-    if 'video' in request.files and request.files['video']:
-        f = request.files['video']
+    if 'video_file' in request.files and request.files['video_file']:
+        f = request.files['video_file']
         path = os.path.join(upload_dir, f"{video_id}_{f.filename}")
         file_content = f.read()
         
@@ -33,32 +33,29 @@ def handle_video_upload_or_download(request, upload_dir):
         with open(path, 'wb') as out_file:
             out_file.write(file_content)
         return path, video_id
-    elif 'yt_url' in request.form and request.form['yt_url']:
-        # yt = YouTube(request.form['yt_url'])
-        # stream = yt.streams.filter(file_extension='mp4', progressive=True).first()
-        # path = stream.download(output_path=upload_dir, filename=f"{video_id}.mp4")
-        # return path, video_id
-            temp_file = "temp_video.mp4"
-            ydl_opts = {
-                'outtmpl': temp_file,
-                'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
-                'merge_output_format': 'mp4'
-            }
+    elif 'yt_url' in request.form and request.form['yt_url'].strip():
+        yt_url = request.form['yt_url'].strip()
+        temp_file = "temp_video.mp4"
+        ydl_opts = {
+            'outtmpl': temp_file,
+            'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+            'merge_output_format': 'mp4'
+        }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download(['yt_url'])
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([yt_url])
 
-            # Compress with ffmpeg for OCR-friendly video
-            compressed_path = upload_dir+f"{video_id}.mp4"
-            subprocess.run([
-                "ffmpeg", "-i", temp_file,
-                "-vcodec", "libx264", "-crf", "28",  # Higher CRF = more compression
-                "-preset", "fast",
-                "-acodec", "aac", "-b:a", "96k",
-                compressed_path
-            ])
+        # Compress with ffmpeg for OCR-friendly video
+        compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
+        subprocess.run([
+            "ffmpeg", "-i", temp_file,
+            "-vcodec", "libx264", "-crf", "28",  # Higher CRF = more compression
+            "-preset", "fast",
+            "-acodec", "aac", "-b:a", "96k",
+            compressed_path
+        ])
 
-            os.remove(temp_file)
-            return compressed_path,video_id
+        os.remove(temp_file)
+        return compressed_path, video_id
     else:
-        raise ValueError("No upload or url provided")
+        raise ValueError("No video file uploaded and no YouTube URL provided")

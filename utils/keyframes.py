@@ -471,6 +471,75 @@ def extract_keyframes(
         if 'cap' in locals() and cap is not None:
             cap.release()
 
+def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyframes=30):
+    """
+    Extract additional keyframes from a specific time range in the video.
+    This ensures we have enough keyframes for smooth video generation.
+    """
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Could not open video: {video_path}")
+            return []
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Calculate frame range for the time segment
+        start_frame = int(start_time * fps)
+        end_frame = int(end_time * fps)
+        
+        # Ensure we don't exceed video bounds
+        start_frame = max(0, start_frame)
+        end_frame = min(total_frames - 1, end_frame)
+        
+        if start_frame >= end_frame:
+            cap.release()
+            return []
+        
+        # Calculate frame interval to get desired number of keyframes
+        frame_interval = max(1, (end_frame - start_frame) // max_keyframes)
+        
+        keyframes = []
+        current_frame = start_frame
+        
+        while current_frame <= end_frame and len(keyframes) < max_keyframes:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+            ret, frame = cap.read()
+            
+            if ret:
+                # Calculate timestamp for this frame
+                timestamp = current_frame / fps
+                
+                # Save frame
+                frame_filename = f"additional_kf_{len(keyframes):04d}.jpg"
+                frame_path = os.path.join(os.path.dirname(video_path), frame_filename)
+                
+                # Resize frame for consistency
+                frame = cv2.resize(frame, (854, 480))
+                cv2.imwrite(frame_path, frame)
+                
+                keyframes.append({
+                    'filepath': frame_path,
+                    'timestamp': timestamp,
+                    'confidence': 0.8,  # Default confidence for additional frames
+                    'text': '',  # No OCR text for additional frames
+                    'type': 'additional'
+                })
+            
+            current_frame += frame_interval
+        
+        cap.release()
+        logger.info(f"Extracted {len(keyframes)} additional keyframes for time range {start_time}-{end_time}")
+        return keyframes
+        
+    except Exception as e:
+        logger.error(f"Error extracting additional keyframes: {str(e)}")
+        return []
+    finally:
+        if 'cap' in locals() and cap is not None:
+            cap.release()
+
 def get_keyframe_text_summary(keyframes_dir: str) -> Dict[str, Any]:
     """
     Get OCR text summary for keyframes.

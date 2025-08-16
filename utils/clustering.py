@@ -120,7 +120,9 @@ def cluster_segments(
     method: str = 'lda',
     language: str = 'en',
     min_topic_size: int = 2,
-    max_features: int = 5000
+    max_features: int = 5000,
+    min_cluster_size: int = 2,
+    similarity_threshold: float = 0.7
 ) -> List[List[Dict[str, Any]]]:
     """Cluster text segments into topics.
     
@@ -221,7 +223,7 @@ def cluster_segments(
         # Filter small clusters
         filtered_clusters = [
             cluster for cluster in clusters.values() 
-            if len(cluster) >= min_topic_size
+            if len(cluster) >= min_cluster_size
         ]
         
         # Sort clusters by size (largest first)
