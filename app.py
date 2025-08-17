@@ -250,18 +250,31 @@ def process():
                     # We already have the file saved, just use it
                     logger.info(f"Using already saved file: {video_file_path}")
                     video_path = video_file_path
-                    actual_video_id = video_id  # Use the same ID
+                    # Keep the same video_id for consistency
                 elif yt_url_data:
                     # Process YouTube URL
                     logger.info("Processing YouTube URL...")
-                    video_path, actual_video_id = handle_youtube_download(
-                        yt_url_data, CONFIG['UPLOAD_DIR']
+                    
+                    # Create a status callback function that updates the processing status
+                    def update_download_status(status, progress, message):
+                        update_processing_status(video_id, status, progress, message)
+                    
+                    video_path, downloaded_video_id = handle_youtube_download(
+                        yt_url_data, 
+                        CONFIG['UPLOAD_DIR'],
+                        video_id=video_id,  # Pass the original video_id
+                        status_callback=update_download_status  # Pass the status callback
                     )
-                    video_id = actual_video_id
+                    # Use the downloaded video ID for the file path, but keep the original video_id for status updates
+                    logger.info(f"YouTube video downloaded to: {video_path}")
+                    logger.info(f"Downloaded video ID: {downloaded_video_id}, Processing video ID: {video_id}")
+                    
+                    # Status is now updated by the callback, no need to manually update here
                 else:
                     raise ValueError("No video file or YouTube URL available")
                 
                 logger.info(f"Video successfully processed: {video_path}")
+                logger.info(f"Moving to transcription stage with video_path: {video_path}")
                 
             except Exception as e:
                 logger.error(f"Failed to process video: {str(e)}")
@@ -269,20 +282,56 @@ def process():
                 logger.error(f"Exception details: {e}")
                 import traceback
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                raise ValueError(f"Video processing failed: {str(e)}")
+                # Update status to error so frontend sees the real error
+                update_processing_status(
+                    video_id,
+                    'error',
+                    0,
+                    'Failed to download/process video',
+                    str(e)
+                )
+                return  # Stop further processing
             
             # 2. Transcribe the video
+            logger.info(f"Starting transcription for video: {video_path}")
+            logger.info(f"Video file exists: {os.path.exists(video_path)}")
+            logger.info(f"Video file size: {os.path.getsize(video_path) if os.path.exists(video_path) else 'N/A'} bytes")
+            
+            # Test if ffmpeg is available
+            try:
+                import subprocess
+                result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+                logger.info(f"FFmpeg available: {result.returncode == 0}")
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg error: {result.stderr}")
+            except Exception as e:
+                logger.error(f"FFmpeg test failed: {e}")
+            
             update_processing_status(video_id, 'transcribing', 20, 'Transcribing audio...')
             
             # Use auto-detection if source language is auto
             transcription_language = source_language if source_language != 'auto' else 'english'
+            logger.info(f"Transcription language: {transcription_language}")
             
-            transcript_path, segments = transcribe_video(
-                video_path, 
-                CONFIG['PROCESSED_DIR'], 
-                video_id,
-                language=transcription_language
-            )
+            logger.info(f"Calling transcribe_video function...")
+            logger.info(f"Function signature: transcribe_video({video_path}, {CONFIG['PROCESSED_DIR']}, {video_id}, {transcription_language})")
+            
+            # Test if the function is callable
+            logger.info(f"transcribe_video function type: {type(transcribe_video)}")
+            logger.info(f"transcribe_video function callable: {callable(transcribe_video)}")
+            
+            try:
+                transcript_path, segments = transcribe_video(
+                    video_path, 
+                    CONFIG['PROCESSED_DIR'], 
+                    video_id,
+                    language=transcription_language
+                )
+                logger.info(f"Transcription completed. Transcript path: {transcript_path}, Segments: {len(segments) if segments else 0}")
+            except Exception as e:
+                logger.error(f"Transcription failed: {str(e)}")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                raise ValueError(f"Transcription failed: {str(e)}")
             
             if not segments:
                 raise ValueError("No speech detected in the video")
