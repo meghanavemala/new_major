@@ -203,7 +203,7 @@ def transcribe_video(
         result = model.transcribe(
             audio_path,
             language=lang_code,
-            verbose=True,
+            verbose=False,
             fp16=(device == 'cuda')  # Use mixed precision on GPU
         )
         
