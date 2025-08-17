@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
 # Import utility modules
-from utils.downloader import handle_video_upload_or_download, is_youtube_url
+from utils.downloader import is_youtube_url, handle_youtube_download
 from utils.transcriber import transcribe_video, SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
 from utils.keyframes import extract_keyframes, get_keyframe_text_summary, extract_keyframes_for_time_range
 from utils.clustering import cluster_segments, extract_keywords
@@ -126,7 +126,7 @@ def index():
         resolutions=SUPPORTED_RESOLUTIONS,
         default_resolution=CONFIG['DEFAULT_RESOLUTION']
     )
-from flask import copy_current_request_context
+
 @app.route('/api/process', methods=['POST'])
 def process():
     """Handle video processing request with enhanced language support."""
@@ -172,22 +172,104 @@ def process():
         return jsonify({'error': f'Unsupported target language: {target_language}'}), 400
     
     # Generate a unique ID for this processing job
-    video_id= str(int(time.time()))
-    @copy_current_request_context
+    video_id = str(int(time.time()))
+    
+    # Initialize processing status
+    update_processing_status(video_id, 'initializing', 0, 'Initializing processing...')
+    
+    # COMPLETELY NEW APPROACH: Save file to disk immediately and pass the path
+    video_file_path = None
+    yt_url_data = None
+    
+    if 'video_file' in request.files and request.files['video_file']:
+        f = request.files['video_file']
+        if f and f.filename:
+            try:
+                # Generate a temporary file path
+                import tempfile
+                import uuid
+                temp_id = str(uuid.uuid4())
+                temp_filename = f"{temp_id}_{f.filename}"
+                temp_path = os.path.join(CONFIG['UPLOAD_DIR'], temp_filename)
+                
+                logger.info(f"Saving uploaded file to temporary path: {temp_path}")
+                
+                # Save file to disk immediately - no memory operations
+                with open(temp_path, 'wb') as temp_file:
+                    # Read and write in one operation
+                    temp_file.write(f.read())
+                
+                # Verify file was saved
+                if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                    video_file_path = temp_path
+                    logger.info(f"File saved successfully: {temp_path} ({os.path.getsize(temp_path)} bytes)")
+                else:
+                    raise ValueError("Failed to save uploaded file")
+                
+                # Clear file reference immediately
+                f = None
+                
+            except Exception as e:
+                logger.error(f"Failed to save uploaded file: {e}")
+                # Clean up any partial file
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                raise ValueError(f"Failed to save uploaded file: {str(e)}")
+    
+    if 'yt_url' in request.form and request.form['yt_url'].strip():
+        yt_url_data = str(request.form['yt_url'].strip())
+        logger.info(f"YouTube URL provided: {yt_url_data}")
+    
+    # Verify we have valid data before starting processing
+    if not video_file_path and not yt_url_data:
+        raise ValueError("No video file or YouTube URL provided")
+    
+    logger.info("File handling completed successfully, starting background processing...")
+    
+    # Force cleanup
+    import gc
+    gc.collect()
+    logger.info("Garbage collection completed")
+    
     # Start processing in background
     def process_video():
         nonlocal video_id
         try:
+            logger.info(f"Starting background processing for video {video_id}")
+            logger.info(f"Video file path available: {video_file_path is not None}")
+            logger.info(f"YouTube URL data available: {yt_url_data is not None}")
+            
             update_processing_status(video_id, 'downloading', 5, 'Downloading video...')
             
-            # 1. Download or save the uploaded video
-            video_path, actual_video_id = handle_video_upload_or_download(
-                request, 
-                CONFIG['UPLOAD_DIR']
-            )
-            
-            # Use the actual video ID from the handler
-            video_id = actual_video_id
+            # 1. Process the uploaded video file or YouTube URL
+            try:
+                if video_file_path:
+                    # We already have the file saved, just use it
+                    logger.info(f"Using already saved file: {video_file_path}")
+                    video_path = video_file_path
+                    actual_video_id = video_id  # Use the same ID
+                elif yt_url_data:
+                    # Process YouTube URL
+                    logger.info("Processing YouTube URL...")
+                    video_path, actual_video_id = handle_youtube_download(
+                        yt_url_data, CONFIG['UPLOAD_DIR']
+                    )
+                    video_id = actual_video_id
+                else:
+                    raise ValueError("No video file or YouTube URL available")
+                
+                logger.info(f"Video successfully processed: {video_path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to process video: {str(e)}")
+                logger.error(f"Exception type: {type(e)}")
+                logger.error(f"Exception details: {e}")
+                import traceback
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                raise ValueError(f"Video processing failed: {str(e)}")
             
             # 2. Transcribe the video
             update_processing_status(video_id, 'transcribing', 20, 'Transcribing audio...')
@@ -449,9 +531,47 @@ def process():
                 'An error occurred during processing',
                 str(e)
             )
+        finally:
+            # Cancel all timers if they exist
+            if 'timeout_timer' in locals():
+                timeout_timer.cancel()
+            if 'watchdog_timer' in locals():
+                watchdog_timer.cancel()
     
-    # Start processing in background
-    from threading import Thread
+    # Start processing in background with timeout
+    from threading import Thread, Timer
+    
+    def timeout_handler():
+        logger.error(f"Processing timeout for video {video_id}")
+        update_processing_status(
+            video_id,
+            'error',
+            0,
+            'Processing timeout - taking too long',
+            'Processing exceeded maximum time limit'
+        )
+    
+    # Set a timeout of 30 minutes for the entire process
+    timeout_timer = Timer(30 * 60, timeout_handler)  # 30 minutes
+    timeout_timer.start()
+    
+    # Add a watchdog timer to check if processing is stuck
+    def watchdog_check():
+        current_status = get_processing_status(video_id)
+        if current_status.get('status') == 'downloading' and current_status.get('progress') == 5:
+            # If stuck at 5% for more than 5 minutes, force error
+            logger.error(f"Processing stuck at 5% for video {video_id}, forcing error")
+            update_processing_status(
+                video_id,
+                'error',
+                0,
+                'Processing stuck - forcing error',
+                'Processing got stuck at download stage'
+            )
+    
+    watchdog_timer = Timer(5 * 60, watchdog_check)  # 5 minutes
+    watchdog_timer.start()
+    
     thread = Thread(target=process_video)
     thread.daemon = True
     thread.start()
@@ -475,18 +595,32 @@ def test_upload():
     if 'video_file' in request.files:
         f = request.files['video_file']
         if f and f.filename:
-            # Read the file content to get size
-            f.seek(0, 2)  # Seek to end
-            file_size = f.tell()
-            f.seek(0)  # Reset to beginning
-            
-            logger.info(f"Test upload - received file: {f.filename}, size: {file_size}")
-            return jsonify({
-                'success': True, 
-                'filename': f.filename,
-                'size': file_size,
-                'content_type': f.content_type
-            })
+            # Get file size without seeking to avoid closing the file
+            try:
+                # Use content_length if available, otherwise read a small chunk to test
+                if hasattr(f, 'content_length') and f.content_length:
+                    file_size = f.content_length
+                else:
+                    # Read a small chunk to test if file is readable
+                    f.seek(0)
+                    test_chunk = f.read(1024)  # Read 1KB
+                    file_size = len(test_chunk)
+                    if test_chunk:
+                        # File is readable, we can estimate size
+                        file_size = "Readable (size unknown)"
+                    else:
+                        file_size = "Empty file"
+                
+                logger.info(f"Test upload - received file: {f.filename}, size: {file_size}")
+                return jsonify({
+                    'success': True, 
+                    'filename': f.filename,
+                    'size': file_size,
+                    'content_type': getattr(f, 'content_type', 'unknown')
+                })
+            except Exception as e:
+                logger.error(f"Test upload - error reading file: {e}")
+                return jsonify({'success': False, 'error': f'File read error: {str(e)}'})
         else:
             logger.warning("Test upload - video_file exists but is empty or has no filename")
             return jsonify({'success': False, 'error': 'File is empty or has no filename'})
@@ -498,6 +632,7 @@ def test_upload():
 def get_status(video_id: str):
     """Get the current status of a processing job."""
     status = get_processing_status(video_id)
+    logger.info(f"Status request for {video_id}: {status}")
     return jsonify(status)
 
 @app.route('/api/summary/<video_id>')

@@ -298,81 +298,57 @@ def extract_keyframes(
 ) -> Optional[str]:
     """
     Extract keyframes from video with OCR text analysis.
-    
-    Args:
-        video_path: Path to input video file
-        processed_dir: Directory to save keyframes
-        video_id: Unique identifier for the video
-        target_resolution: Target resolution for keyframes ('480p', '720p', '1080p')
-        frame_interval: Extract one frame every N frames
-        similarity_threshold: Threshold for frame similarity (0-1)
-        ocr_languages: Languages for OCR text extraction
-        enable_ocr: Whether to perform OCR analysis on keyframes
-        
-    Returns:
-        Path to keyframes directory or None if failed
     """
     keyframes_dir = None
     cap = None
-    
     try:
         logger.info(f"Extracting keyframes from {video_path}")
-        
-        # Create output directory
         keyframes_dir = os.path.join(processed_dir, f"{video_id}_keyframes")
         os.makedirs(keyframes_dir, exist_ok=True)
-        
-        # Initialize OCR if enabled
+
         ocr_engine = None
         if enable_ocr:
             ocr_engine = KeyframeOCR(languages=ocr_languages)
             logger.info(f"OCR enabled for languages: {ocr_languages}")
-        
-        # Resolution mapping
+
         resolution_map = {
             '480p': (854, 480),
             '720p': (1280, 720),
             '1080p': (1920, 1080)
         }
         target_width, target_height = resolution_map.get(target_resolution, (854, 480))
-        
-        # Open video
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.error(f"Failed to open video: {video_path}")
             return None
-        
-        # Get video properties
+
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
         logger.info(f"Video FPS: {fps}, Total frames: {total_frames}")
-        
+
         keyframes = []
         keyframe_metadata = []
         prev_frame = None
         frame_count = 0
         saved_count = 0
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
-            if frame_count % frame_interval == 0:  # Extract every Nth frame
+
+            if frame_count % frame_interval == 0:
                 if saved_count >= max_keyframes:
                     logger.info(f"Reached maximum keyframe limit ({max_keyframes}), stopping extraction")
                     break
-                    
+
                 if prev_frame is None or not _are_frames_similar(frame, prev_frame, similarity_threshold):
-                    # Resize frame to target resolution
                     resized_frame = cv2.resize(frame, (target_width, target_height))
-                    
                     filename = f"keyframe_{saved_count:06d}.jpg"
                     filepath = os.path.join(keyframes_dir, filename)
                     cv2.imwrite(filepath, resized_frame)
-                    
-                    # Perform OCR if enabled
+
                     ocr_data = {}
                     if enable_ocr and ocr_engine:
                         ocr_result = ocr_engine.extract_text(resized_frame)
@@ -382,8 +358,7 @@ def extract_keyframes(
                             'method': ocr_result.get('method', 'none'),
                             'word_count': ocr_result.get('word_count', 0)
                         }
-                    
-                    # Store metadata
+
                     metadata = {
                         'filename': filename,
                         'filepath': filepath,
@@ -392,24 +367,21 @@ def extract_keyframes(
                         'resolution': f"{target_width}x{target_height}",
                         'ocr_data': ocr_data
                     }
-                    
+
                     keyframes.append(filepath)
                     keyframe_metadata.append(metadata)
                     prev_frame = resized_frame.copy()
                     saved_count += 1
-            
+
             frame_count += 1
-            
-            # Progress logging
-            if frame_count % 100 == 0:  # More frequent updates
+
+            if frame_count % 100 == 0:
                 progress = (frame_count / total_frames) * 100
                 logger.info(f"Progress: {progress:.1f}% - Processed {frame_count}/{total_frames} frames, saved {saved_count} keyframes")
-                
-                # Early stopping if we have enough keyframes
-                if saved_count >= 50:  # Limit to 50 keyframes for reasonable processing time
+                if saved_count >= 50:
                     logger.info("Reached maximum keyframe limit, stopping extraction")
                     break
-        
+
         # Save metadata
         metadata_file = os.path.join(keyframes_dir, 'keyframes_metadata.json')
         try:
@@ -427,25 +399,21 @@ def extract_keyframes(
             logger.info(f"Keyframe metadata saved to {metadata_file}")
         except Exception as e:
             logger.error(f"Failed to save keyframe metadata: {e}")
-        
+
         logger.info(f"Extracted {len(keyframes)} keyframes to {keyframes_dir}")
-        
+
         # Extract and summarize OCR text
         if enable_ocr:
             all_ocr_text = []
             high_confidence_text = []
-            
             for metadata in keyframe_metadata:
                 ocr_data = metadata.get('ocr_data', {})
                 text = ocr_data.get('text', '')
                 confidence = ocr_data.get('confidence', 0)
-                
                 if text:
                     all_ocr_text.append(text)
-                    if confidence > 70:  # High confidence threshold
+                    if confidence > 70:
                         high_confidence_text.append(text)
-            
-            # Save OCR summary
             ocr_summary = {
                 'total_text_frames': len([t for t in all_ocr_text if t]),
                 'high_confidence_frames': len(high_confidence_text),
@@ -453,7 +421,6 @@ def extract_keyframes(
                 'high_confidence_text': ' '.join(high_confidence_text),
                 'word_frequency': dict(Counter(' '.join(all_ocr_text).split()).most_common(20))
             }
-            
             ocr_summary_file = os.path.join(keyframes_dir, 'ocr_summary.json')
             try:
                 with open(ocr_summary_file, 'w', encoding='utf-8') as f:
@@ -461,14 +428,14 @@ def extract_keyframes(
                 logger.info(f"OCR summary saved to {ocr_summary_file}")
             except Exception as e:
                 logger.error(f"Failed to save OCR summary: {e}")
-        
+
         return keyframes_dir
-        
+
     except Exception as e:
         logger.error(f"Error extracting keyframes: {e}")
         return None
     finally:
-        if 'cap' in locals() and cap is not None:
+        if cap is not None:
             cap.release()
 
 def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyframes=30):
@@ -476,6 +443,7 @@ def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyfr
     Extract additional keyframes from a specific time range in the video.
     This ensures we have enough keyframes for smooth video generation.
     """
+    cap = None
     try:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -494,7 +462,6 @@ def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyfr
         end_frame = min(total_frames - 1, end_frame)
         
         if start_frame >= end_frame:
-            cap.release()
             return []
         
         # Calculate frame interval to get desired number of keyframes
@@ -529,7 +496,6 @@ def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyfr
             
             current_frame += frame_interval
         
-        cap.release()
         logger.info(f"Extracted {len(keyframes)} additional keyframes for time range {start_time}-{end_time}")
         return keyframes
         
@@ -537,7 +503,7 @@ def extract_keyframes_for_time_range(video_path, start_time, end_time, max_keyfr
         logger.error(f"Error extracting additional keyframes: {str(e)}")
         return []
     finally:
-        if 'cap' in locals() and cap is not None:
+        if cap is not None:
             cap.release()
 
 def get_keyframe_text_summary(keyframes_dir: str) -> Dict[str, Any]:

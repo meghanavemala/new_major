@@ -182,6 +182,7 @@ async function submitForm() {
         }
         
         currentVideoId = result.video_id;
+        console.log('Processing started with video ID:', currentVideoId);
         showProcessingSection();
         startProgressTracking();
         
@@ -255,12 +256,15 @@ function startProgressTracking() {
             }
             
             const status = await response.json();
+            console.log('Progress update:', status);
             updateProgress(status);
             
             if (status.status === 'completed') {
+                console.log('Processing completed, showing results');
                 clearInterval(progressInterval);
                 showResults(status);
             } else if (status.status === 'error') {
+                console.error('Processing failed:', status.error);
                 clearInterval(progressInterval);
                 showError(`Processing failed: ${status.error}`);
                 showUploadSection();
@@ -280,8 +284,9 @@ function updateProgress(status) {
     progressMessage.textContent = message;
     progressFill.style.width = `${progress}%`;
     
-    // Update step status based on progress
+    // Update step status based on both progress and message
     updateStepStatus(progress);
+    updateStepStatusByStage(status);
 }
 
 function updateStepStatus(progress) {
@@ -311,6 +316,62 @@ function updateStepStatus(progress) {
     }
 }
 
+// Enhanced step status update based on processing stage
+function updateStepStatusByStage(status) {
+    const message = status.message || '';
+    const progress = status.progress || 0;
+    
+    console.log('Updating step status by stage:', { message, progress });
+    
+    // Reset all steps
+    Object.values(steps).forEach(step => {
+        step.className = 'step pending';
+    });
+    
+    // Update steps based on processing stage
+    if (message.includes('Downloading') || message.includes('Uploading')) {
+        steps.step1.className = 'step active';
+        console.log('Step 1: Download/Upload - ACTIVE');
+    } else if (message.includes('Transcribing')) {
+        steps.step1.className = 'step completed';
+        steps.step2.className = 'step active';
+        console.log('Step 1: Download/Upload - COMPLETED');
+        console.log('Step 2: Transcription - ACTIVE');
+    } else if (message.includes('Extracting') || message.includes('key frames')) {
+        steps.step1.className = 'step completed';
+        steps.step2.className = 'step completed';
+        steps.step3.className = 'step active';
+        console.log('Step 1: Download/Upload - COMPLETED');
+        console.log('Step 2: Transcription - COMPLETED');
+        console.log('Step 3: Keyframes - ACTIVE');
+    } else if (message.includes('Analyzing') || message.includes('Clustering') || message.includes('Generating summary')) {
+        steps.step1.className = 'step completed';
+        steps.step2.className = 'step completed';
+        steps.step3.className = 'step completed';
+        steps.step4.className = 'step active';
+        console.log('Step 1: Download/Upload - COMPLETED');
+        console.log('Step 2: Transcription - COMPLETED');
+        console.log('Step 3: Keyframes - COMPLETED');
+        console.log('Step 4: Analysis - ACTIVE');
+    } else if (message.includes('Creating video') || message.includes('Rendering')) {
+        steps.step1.className = 'step completed';
+        steps.step2.className = 'step completed';
+        steps.step3.className = 'step completed';
+        steps.step4.className = 'step completed';
+        steps.step5.className = 'step active';
+        console.log('Step 1: Download/Upload - COMPLETED');
+        console.log('Step 2: Transcription - COMPLETED');
+        console.log('Step 3: Keyframes - COMPLETED');
+        console.log('Step 4: Analysis - COMPLETED');
+        console.log('Step 5: Video Generation - ACTIVE');
+    } else if (message.includes('complete') || message.includes('Complete')) {
+        Object.values(steps).forEach(step => {
+            step.className = 'step completed';
+        });
+        console.log('All steps completed!');
+    }
+}
+
 // Section visibility
 function showProcessingSection() {
     uploadSection.style.display = 'none';
@@ -320,6 +381,8 @@ function showProcessingSection() {
 }
 
 function showResults(data) {
+    console.log('Showing results with data:', data);
+    
     uploadSection.style.display = 'none';
     processingSection.style.display = 'none';
     resultsSection.style.display = 'block';
@@ -327,9 +390,15 @@ function showResults(data) {
     // Store video data globally for access in other functions
     window.currentVideoData = data;
     
-    populateTopics(data);
-    populateDownloadButtons(data);
-    showSuccess('Video processing completed successfully!');
+    // Check if we have the required data
+    if (data.summaries && data.summaries.length > 0) {
+        populateTopics(data);
+        populateDownloadButtons(data);
+        showSuccess('Video processing completed successfully!');
+                } else {
+        console.error('No summaries found in data:', data);
+        showError('Processing completed but no summaries were generated.');
+    }
 }
 
 function showUploadSection() {
