@@ -130,7 +130,7 @@ function validateForm() {
         return false;
     }
     
-    if (videoFile && videoFile.size > 40 * 1024 * 1024) {
+    if (videoFile && videoFile.size > 100 * 1024 * 1024) {
         showError('Video file size must be less than 40MB.');
         return false;
     }
