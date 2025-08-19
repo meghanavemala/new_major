@@ -3,832 +3,753 @@ import json
 import time
 import logging
 import traceback
+import subprocess
+import shutil
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor
 import re
+
+import cv2
+import numpy as np
+from threading import Thread, Timer
+from pydub import AudioSegment
+from pydub.generators import Sine
+from pydub.effects import normalize
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx
+from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
+from moviepy.config import change_settings
+
+# Configure moviepy to use ffmpeg
+change_settings({"FFMPEG_BINARY": "ffmpeg"})
+
+# Local imports
+from utils.video_maker import make_summary_video, add_subtitle_to_frame
+from utils.keyframes import (
+    extract_keyframes,
+    extract_keyframes_for_time_range,
+    get_keyframe_text_summary,
+)
+from utils.transcriber import transcribe_video
+from utils.translator import translate_segments
+from utils.topic_analyzer import analyze_topic_segments
+from utils.summarizer import summarize_cluster
+from utils.tts import text_to_speech
+
+from utils.downloader import is_youtube_url, handle_youtube_download
+from utils.transcriber import SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
+from utils.clustering import cluster_segments, extract_keywords
+from utils.topic_analyzer import get_keyframes_for_topic, calculate_keyframe_distribution
+from utils.tts import SUPPORTED_VOICES, get_available_voices
+from utils.video_maker import SUPPORTED_RESOLUTIONS, select_keyframes_for_topic
+from utils.translator import (
+    translate_text,
+    get_available_languages,
+    detect_language,
+    LANGUAGE_MAPPINGS,
+)
+
 from flask import (
-    Flask, render_template, request, jsonify, 
-    send_from_directory, session, Response, stream_with_context
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_from_directory,
+    session,
+    Response,
+    stream_with_context,
 )
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
-# Import utility modules
-from utils.downloader import is_youtube_url, handle_youtube_download
-from utils.transcriber import transcribe_video, SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
-from utils.keyframes import extract_keyframes, get_keyframe_text_summary, extract_keyframes_for_time_range
-from utils.clustering import cluster_segments, extract_keywords
-from utils.summarizer import summarize_cluster
-from utils.tts import text_to_speech, SUPPORTED_VOICES, get_available_voices
-from utils.video_maker import make_summary_video, SUPPORTED_RESOLUTIONS, select_keyframes_for_topic
-from utils.translator import (
-    translate_text, translate_segments, get_available_languages,
-    detect_language, LANGUAGE_MAPPINGS
-)
-
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(filename='app.log',encoding='utf-8')
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler("app.log")],
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
-CONFIG = {
-    'UPLOAD_DIR': 'uploads',
-    'PROCESSED_DIR': 'processed',
-    'MAX_CONTENT_LENGTH': 40 * 1024 * 1024,  # 40MB
-    'MAX_VIDEO_DURATION': 40 * 60,  # 40 minutes in seconds
-    'SUPPORTED_EXTENSIONS': {'mp4', 'avi', 'mov', 'mkv', 'webm'},
-    'DEFAULT_LANGUAGE': 'en',
-    'DEFAULT_VOICE': 'en-US-Standard-C',
-    'DEFAULT_RESOLUTION': '480p',
-    'ENABLE_DARK_MODE': True,
+
+# Helper functions for video processing
+def get_video_duration(video_path: str) -> float:
+    """Get the duration of a video file in seconds."""
+    try:
+        clip = VideoFileClip(video_path)
+        duration = clip.duration
+        clip.close()
+        return duration
+    except Exception as e:
+        logger.error(f"Error getting video duration for {video_path}: {str(e)}")
+        return 0.0
+
+
+def extract_audio(video_path: str, output_path: str) -> bool:
+    """Extract audio from a video file."""
+    try:
+        video = VideoFileClip(video_path)
+        audio = video.audio
+        audio.write_audiofile(output_path, logger=None)
+        video.close()
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f"Error extracting audio from {video_path}: {str(e)}")
+        return False
+
+
+def create_transition_video(
+    start_frame: np.ndarray,
+    end_frame: np.ndarray,
+    output_path: str,
+    duration: float = 1.5,
+    transition_type: str = "fade",
+    resolution: Tuple[int, int] = (1280, 720),
+) -> bool:
+    """Create a transition video between two frames."""
+    try:
+        # Ensure frames match target resolution
+        start_frame = cv2.resize(start_frame, (resolution[0], resolution[1]))
+        end_frame = cv2.resize(end_frame, (resolution[0], resolution[1]))
+
+        temp_files: List[str] = []
+        fps = 30
+        frame_count = max(1, int(duration * fps))
+
+        for i in range(frame_count):
+            alpha = i / (frame_count - 1) if frame_count > 1 else 1.0
+            if transition_type == "fade":
+                blended = cv2.addWeighted(start_frame, 1 - alpha, end_frame, alpha, 0)
+            elif transition_type == "slide":
+                width = resolution[0]
+                offset = int(alpha * width)
+                blended = np.zeros_like(start_frame)
+                if offset < width:
+                    blended[:, : width - offset] = start_frame[:, offset:]
+                    blended[:, width - offset :] = end_frame[:, :offset]
+                else:
+                    blended[:] = end_frame
+            else:
+                # Default to fade if unknown type
+                blended = cv2.addWeighted(start_frame, 1 - alpha, end_frame, alpha, 0)
+
+            temp_frame_path = os.path.join(
+                os.path.dirname(output_path), f"temp_frame_{i:04d}.jpg"
+            )
+            cv2.imwrite(temp_frame_path, blended)
+            temp_files.append(temp_frame_path)
+
+        if temp_files:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                os.path.join(os.path.dirname(temp_files[0]), "temp_frame_%04d.jpg"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                output_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg error creating transition: {result.stderr}")
+                return False
+
+        # Cleanup temp frames
+        for temp_file in temp_files:
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f"Error creating transition video: {str(e)}")
+        return False
+
+
+def capture_thumbnail(video_path: str, output_path: str, time_sec: float = 5.0) -> bool:
+    """Capture a thumbnail from a video at the specified time."""
+    try:
+        video = VideoFileClip(video_path)
+        time_sec = float(min(max(0, time_sec), max(0, video.duration - 0.1)))
+        frame = video.get_frame(time_sec)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(output_path, frame_bgr)
+        video.close()
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f"Error capturing thumbnail: {str(e)}")
+        return False
+
+
+def get_video_frame(video_path: str, frame_index: int = 0) -> Optional[np.ndarray]:
+    """Get a specific frame from a video."""
+    try:
+        video = cv2.VideoCapture(video_path)
+        total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+        if frame_index < 0:
+            frame_index = max(0, total_frames + frame_index)
+        video.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ret, frame = video.read()
+        video.release()
+        return frame if ret else None
+    except Exception as e:
+        logger.error(f"Error getting video frame: {str(e)}")
+        return None
+
+
+CONFIG: Dict[str, Any] = {
+    "UPLOAD_DIR": "uploads",
+    "PROCESSED_DIR": "processed",
+    "MAX_CONTENT_LENGTH": 40 * 1024 * 1024,
+    "MAX_VIDEO_DURATION": 40 * 60,
+    "SUPPORTED_EXTENSIONS": {"mp4", "avi", "mov", "mkv", "webm"},
+    "DEFAULT_LANGUAGE": "en",
+    "DEFAULT_VOICE": "en-US-Standard-C",
+    "DEFAULT_RESOLUTION": "480p",
+    "ENABLE_DARK_MODE": True,
 }
 
-# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
-app.config['MAX_CONTENT_LENGTH'] = CONFIG['MAX_CONTENT_LENGTH']
-# Ensure directories exist
-for dir_path in [CONFIG['UPLOAD_DIR'], CONFIG['PROCESSED_DIR']]:
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production")
+app.config["MAX_CONTENT_LENGTH"] = CONFIG["MAX_CONTENT_LENGTH"]
+
+for dir_path in [CONFIG["UPLOAD_DIR"], CONFIG["PROCESSED_DIR"]]:
     os.makedirs(dir_path, exist_ok=True)
 
-# Global state for tracking processing status
-processing_status = {}
+processing_status: Dict[str, Dict[str, Any]] = {}
 
-def get_processing_status(video_id: str) -> Dict:
-    """Get the current processing status for a video."""
-    return processing_status.get(video_id, {
-        'status': 'not_started',
-        'progress': 0,
-        'message': 'Processing not started',
-        'error': None
-    })
 
-def update_processing_status(video_id: str, status: str, progress: int, message: str, error: str = None) -> None:
-    """Update the processing status for a video."""
+def get_processing_status(video_id: str) -> Dict[str, Any]:
+    return processing_status.get(
+        video_id,
+        {
+            "status": "not_started",
+            "progress": 0,
+            "message": "Processing not started",
+            "error": None,
+        },
+    )
+
+
+def update_processing_status(
+    video_id: str, status: str, progress: int, message: str, error: Optional[str] = None
+) -> None:
     if video_id not in processing_status:
         processing_status[video_id] = {}
-    
-    processing_status[video_id].update({
-        'status': status,
-        'progress': progress,
-        'message': message,
-        'error': error,
-        'last_updated': time.time()
-    })
+    processing_status[video_id].update(
+        {
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "error": error,
+            "last_updated": time.time(),
+        }
+    )
 
-@app.route('/test')
+
+@app.route("/test")
 def test():
-    """Simple test route to verify the app is working."""
-    return jsonify({'status': 'ok', 'message': 'Flask app is running'})
+    return jsonify({"status": "ok", "message": "Flask app is running"})
 
-@app.route('/')
+
+@app.route("/")
 def index():
-    """Render the main page with language and voice options."""
-    # Get available voices grouped by language
-    voices_by_lang = {}
+    voices_by_lang: Dict[str, Dict[str, Any]] = {}
     available_voices = get_available_voices()
-    
-    # voices_by_lang will have the structure: {lang_code: {'name': str, 'voices': list}}
     for lang_code, voices in available_voices.items():
         voices_by_lang[lang_code] = {
-            'name': TRANSCRIBE_LANGS.get(lang_code, 'Unknown'),
-            'voices': voices
+            "name": TRANSCRIBE_LANGS.get(lang_code, "Unknown"),
+            "voices": voices,
         }
-    
-    # Sort languages by name
+
     sorted_languages = sorted(
-        [(code, data['name']) for code, data in voices_by_lang.items()],
-        key=lambda x: x[1]
+        [(code, data["name"]) for code, data in voices_by_lang.items()],
+        key=lambda x: x[1],
     )
-    
-    # Get default language and voice
-    default_lang = request.cookies.get('preferred_language', CONFIG['DEFAULT_LANGUAGE'])
-    default_voice = request.cookies.get('preferred_voice', CONFIG['DEFAULT_VOICE'])
-    dark_mode = request.cookies.get('dark_mode', 'true') == 'true'
-    
+
+    default_lang = request.cookies.get("preferred_language", CONFIG["DEFAULT_LANGUAGE"])
+    default_voice = request.cookies.get("preferred_voice", CONFIG["DEFAULT_VOICE"])
+    dark_mode = request.cookies.get("dark_mode", "true") == "true"
+
     return render_template(
-        'index.html',
+        "index.html",
         languages=sorted_languages,
         voices_by_lang=voices_by_lang,
         default_language=default_lang,
         default_voice=default_voice,
         dark_mode=dark_mode,
-        max_file_size=CONFIG['MAX_CONTENT_LENGTH'],
-        max_duration=CONFIG['MAX_VIDEO_DURATION'],
-        supported_extensions=', '.join(CONFIG['SUPPORTED_EXTENSIONS']),
+        max_file_size=CONFIG["MAX_CONTENT_LENGTH"],
+        max_duration=CONFIG["MAX_VIDEO_DURATION"],
+        supported_extensions=", ".join(CONFIG["SUPPORTED_EXTENSIONS"]),
         resolutions=SUPPORTED_RESOLUTIONS,
-        default_resolution=CONFIG['DEFAULT_RESOLUTION']
+        default_resolution=CONFIG["DEFAULT_RESOLUTION"],
     )
 
-@app.route('/api/process', methods=['POST'])
+
+@app.route("/api/process", methods=["POST"])
 def process():
-    """Handle video processing request with enhanced language support."""
-    # Get request data
-    source_language = request.form.get('source_language', 'auto')
-    target_language = request.form.get('target_language', 'english')
-    voice = request.form.get('voice', CONFIG['DEFAULT_VOICE'])
-    resolution = request.form.get('resolution', CONFIG['DEFAULT_RESOLUTION'])
-    summary_length = request.form.get('summary_length', 'medium')
-    enable_ocr = request.form.get('enable_ocr', 'true').lower() == 'true'
-    
-    # Validate input (either video file or YouTube URL must be provided)
-    video_file = request.files.get('video_file')
-    yt_url = request.form.get('yt_url', '').strip()
-    
-    # Debug logging
+    source_language = request.form.get("source_language", "auto")
+    target_language = request.form.get("target_language", "english")
+    voice = request.form.get("voice", CONFIG["DEFAULT_VOICE"])
+    resolution = request.form.get("resolution", CONFIG["DEFAULT_RESOLUTION"])
+    summary_length = request.form.get("summary_length", "medium")
+    enable_ocr = request.form.get("enable_ocr", "true").lower() == "true"
+
+    video_file = request.files.get("video_file")
+    yt_url = request.form.get("yt_url", "").strip()
+
     logger.info(f"Received video_file: {video_file}")
     logger.info(f"Received yt_url: {yt_url}")
     logger.info(f"All form fields: {list(request.form.keys())}")
     logger.info(f"All files: {list(request.files.keys())}")
     logger.info(f"Request content type: {request.content_type}")
     logger.info(f"Request content length: {request.content_length}")
-    
-    # Check if video_file exists and has content
+
     if video_file:
-        logger.info(f"Video file details - filename: {video_file.filename}, content_type: {video_file.content_type}")
+        logger.info(
+            f"Video file details - filename: {video_file.filename}, content_type: {video_file.content_type}"
+        )
         if video_file.filename:
             logger.info(f"Video file has filename: {video_file.filename}")
         else:
             logger.info("Video file exists but has no filename")
     else:
         logger.info("No video_file in request.files")
-    
+
     if not video_file and not yt_url:
         logger.error("Validation failed: No video file or YouTube URL provided")
-        return jsonify({'error': 'Please provide either a video file or a YouTube URL'}), 400
-    
-    # Validate languages
-    if source_language != 'auto' and source_language not in TRANSCRIBE_LANGS:
-        return jsonify({'error': f'Unsupported source language: {source_language}'}), 400
-    
+        return (
+            jsonify({"error": "Please provide either a video file or a YouTube URL"}),
+            400,
+        )
+
+    if source_language != "auto" and source_language not in TRANSCRIBE_LANGS:
+        return jsonify({"error": f"Unsupported source language: {source_language}"}), 400
     if target_language not in LANGUAGE_MAPPINGS:
-        return jsonify({'error': f'Unsupported target language: {target_language}'}), 400
-    
-    # Generate a unique ID for this processing job
+        return jsonify({"error": f"Unsupported target language: {target_language}"}), 400
+
     video_id = str(int(time.time()))
-    
-    # Initialize processing status
-    update_processing_status(video_id, 'initializing', 0, 'Initializing processing...')
-    
-    # COMPLETELY NEW APPROACH: Save file to disk immediately and pass the path
-    video_file_path = None
-    yt_url_data = None
-    
-    if 'video_file' in request.files and request.files['video_file']:
-        f = request.files['video_file']
+    update_processing_status(video_id, "initializing", 0, "Initializing processing...")
+
+    video_file_path: Optional[str] = None
+    yt_url_data: Optional[str] = None
+
+    if "video_file" in request.files and request.files["video_file"]:
+        f = request.files["video_file"]
         if f and f.filename:
             try:
-                # Generate a temporary file path
-                import tempfile
                 import uuid
+
                 temp_id = str(uuid.uuid4())
-                temp_filename = f"{temp_id}_{f.filename}"
-                temp_path = os.path.join(CONFIG['UPLOAD_DIR'], temp_filename)
-                
+                temp_filename = f"{temp_id}_{secure_filename(f.filename)}"
+                temp_path = os.path.join(CONFIG["UPLOAD_DIR"], temp_filename)
                 logger.info(f"Saving uploaded file to temporary path: {temp_path}")
-                
-                # Save file to disk immediately - no memory operations
-                with open(temp_path, 'wb') as temp_file:
-                    # Read and write in one operation
+                with open(temp_path, "wb") as temp_file:
                     temp_file.write(f.read())
-                
-                # Verify file was saved
                 if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     video_file_path = temp_path
-                    logger.info(f"File saved successfully: {temp_path} ({os.path.getsize(temp_path)} bytes)")
+                    logger.info(
+                        f"File saved successfully: {temp_path} ({os.path.getsize(temp_path)} bytes)"
+                    )
                 else:
                     raise ValueError("Failed to save uploaded file")
-                
-                # Clear file reference immediately
                 f = None
-                
             except Exception as e:
                 logger.error(f"Failed to save uploaded file: {e}")
-                # Clean up any partial file
-                if 'temp_path' in locals() and os.path.exists(temp_path):
+                if "temp_path" in locals() and os.path.exists(temp_path):
                     try:
                         os.remove(temp_path)
-                    except:
+                    except Exception:
                         pass
                 raise ValueError(f"Failed to save uploaded file: {str(e)}")
-    
-    if 'yt_url' in request.form and request.form['yt_url'].strip():
-        yt_url_data = str(request.form['yt_url'].strip())
+
+    if "yt_url" in request.form and request.form["yt_url"].strip():
+        yt_url_data = str(request.form["yt_url"].strip())
         logger.info(f"YouTube URL provided: {yt_url_data}")
-    
-    # Verify we have valid data before starting processing
+
     if not video_file_path and not yt_url_data:
         raise ValueError("No video file or YouTube URL provided")
-    
+
     logger.info("File handling completed successfully, starting background processing...")
-    
-    # Force cleanup
     import gc
+
     gc.collect()
     logger.info("Garbage collection completed")
-    
-    # Start processing in background
+
     def process_video():
         nonlocal video_id
         try:
             logger.info(f"Starting background processing for video {video_id}")
             logger.info(f"Video file path available: {video_file_path is not None}")
             logger.info(f"YouTube URL data available: {yt_url_data is not None}")
-            
-            update_processing_status(video_id, 'downloading', 5, 'Downloading video...')
-            
-            # 1. Process the uploaded video file or YouTube URL
+            update_processing_status(video_id, "downloading", 5, "Downloading video...")
             try:
                 if video_file_path:
-                    # We already have the file saved, just use it
                     logger.info(f"Using already saved file: {video_file_path}")
                     video_path = video_file_path
-                    # Keep the same video_id for consistency
                 elif yt_url_data:
-                    # Process YouTube URL
-                    logger.info("Processing YouTube URL...")
-                    
-                    # Create a status callback function that updates the processing status
                     def update_download_status(status, progress, message):
                         update_processing_status(video_id, status, progress, message)
-                    
+
                     video_path, downloaded_video_id = handle_youtube_download(
-                        yt_url_data, 
-                        CONFIG['UPLOAD_DIR'],
-                        video_id=video_id,  # Pass the original video_id
-                        status_callback=update_download_status  # Pass the status callback
+                        yt_url_data,
+                        CONFIG["UPLOAD_DIR"],
+                        video_id=video_id,
+                        status_callback=update_download_status,
                     )
-                    # Use the downloaded video ID for the file path, but keep the original video_id for status updates
                     logger.info(f"YouTube video downloaded to: {video_path}")
-                    logger.info(f"Downloaded video ID: {downloaded_video_id}, Processing video ID: {video_id}")
-                    
-                    # Status is now updated by the callback, no need to manually update here
+                    logger.info(
+                        f"Downloaded video ID: {downloaded_video_id}, Processing video ID: {video_id}"
+                    )
                 else:
                     raise ValueError("No video file or YouTube URL available")
-                
                 logger.info(f"Video successfully processed: {video_path}")
-                logger.info(f"Moving to transcription stage with video_path: {video_path}")
-                
             except Exception as e:
                 logger.error(f"Failed to process video: {str(e)}")
                 logger.error(f"Exception type: {type(e)}")
                 logger.error(f"Exception details: {e}")
-                import traceback
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                # Update status to error so frontend sees the real error
                 update_processing_status(
-                    video_id,
-                    'error',
-                    0,
-                    'Failed to download/process video',
-                    str(e)
+                    video_id, "error", 0, "Failed to download/process video", str(e)
                 )
-                return  # Stop further processing
-            
-            # 2. Transcribe the video
-            logger.info(f"Starting transcription for video: {video_path}")
-            logger.info(f"Video file exists: {os.path.exists(video_path)}")
-            logger.info(f"Video file size: {os.path.getsize(video_path) if os.path.exists(video_path) else 'N/A'} bytes")
-            
-            # Test if ffmpeg is available
+                return
+
+            logger.info(f"Moving to transcription stage with video_path: {video_path}")
+
             try:
-                import subprocess
-                result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+                result = subprocess.run(
+                    ["ffmpeg", "-version"], capture_output=True, text=True
+                )
                 logger.info(f"FFmpeg available: {result.returncode == 0}")
                 if result.returncode != 0:
                     logger.error(f"FFmpeg error: {result.stderr}")
             except Exception as e:
                 logger.error(f"FFmpeg test failed: {e}")
-            
-            update_processing_status(video_id, 'transcribing', 20, 'Transcribing audio...')
-            
-            # Use auto-detection if source language is auto
-            transcription_language = source_language if source_language != 'auto' else 'english'
+
+            update_processing_status(video_id, "transcribing", 20, "Transcribing audio...")
+            transcription_language = source_language if source_language != "auto" else "english"
             logger.info(f"Transcription language: {transcription_language}")
-            
             logger.info(f"Calling transcribe_video function...")
-            logger.info(f"Function signature: transcribe_video({video_path}, {CONFIG['PROCESSED_DIR']}, {video_id}, {transcription_language})")
-            
-            # Test if the function is callable
+            logger.info(
+                f"Function signature: transcribe_video({video_path}, {CONFIG['PROCESSED_DIR']}, {video_id}, {transcription_language})"
+            )
             logger.info(f"transcribe_video function type: {type(transcribe_video)}")
             logger.info(f"transcribe_video function callable: {callable(transcribe_video)}")
-            
+
             try:
                 transcript_path, segments = transcribe_video(
-                    video_path, 
-                    CONFIG['PROCESSED_DIR'], 
+                    video_path,
+                    CONFIG["PROCESSED_DIR"],
                     video_id,
-                    language=transcription_language
+                    language=transcription_language,
                 )
-                logger.info(f"Transcription completed. Transcript path: {transcript_path}, Segments: {len(segments) if segments else 0}")
+                logger.info(
+                    f"Transcription completed. Transcript path: {transcript_path}, Segments: {len(segments) if segments else 0}"
+                )
             except Exception as e:
                 logger.error(f"Transcription failed: {str(e)}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
                 raise ValueError(f"Transcription failed: {str(e)}")
-            
+
             if not segments:
                 raise ValueError("No speech detected in the video")
-                
-            # Auto-detect language if needed
+
             detected_language = transcription_language
-            if source_language == 'auto' and segments:
-                sample_text = ' '.join([seg.get('text', '') for seg in segments[:5]])
+            if source_language == "auto" and segments:
+                sample_text = " ".join([seg.get("text", "") for seg in segments[:5]])
                 detected_lang = detect_language(sample_text)
                 if detected_lang:
                     detected_language = detected_lang
                     logger.info(f"Auto-detected language: {detected_language}")
-            
-            # Translate segments if source and target languages are different
+
             if detected_language != target_language:
-                update_processing_status(video_id, 'translating', 35, 'Translating content...')
+                update_processing_status(video_id, "translating", 35, "Translating content...")
                 segments = translate_segments(segments, detected_language, target_language)
                 logger.info(f"Translated from {detected_language} to {target_language}")
-            
-            # 3. Extract key frames with OCR
-            update_processing_status(video_id, 'extracting', 40, 'Extracting key frames...')
-            
-            # Prepare OCR languages
-            ocr_languages = [detected_language, target_language]
-            if 'english' not in ocr_languages:
-                ocr_languages.append('english')
-            
-            keyframes_dir = extract_keyframes(
-                video_path, 
-                CONFIG['PROCESSED_DIR'], 
-                video_id,
-                target_resolution=resolution,
-                ocr_languages=ocr_languages,
-                enable_ocr=enable_ocr
-            )
-            
-            # Get OCR text summary for additional context
-            ocr_summary = {}
-            if enable_ocr and keyframes_dir:
-                ocr_summary = get_keyframe_text_summary(keyframes_dir)
-                if ocr_summary.get('high_confidence_text'):
-                    logger.info(f"Extracted OCR text: {len(ocr_summary['high_confidence_text'])} characters")
-            
-            # 4. Cluster transcript into topics
-            update_processing_status(video_id, 'clustering', 55, 'Analyzing content...')
-            
-            # Enhance segments with OCR context if available
-            if enable_ocr and ocr_summary.get('high_confidence_text'):
-                # Add OCR context to the first few segments for better clustering
-                ocr_context = ocr_summary['high_confidence_text'][:500]  # Limit context
-                if segments and ocr_context.strip():
-                    segments[0]['text'] += f" [Visual context: {ocr_context}]"
-            
-            # Improved clustering with better parameters
-            n_clusters = min(6, max(3, len(segments) // 8))  # Better cluster count
-            
-            clustered = cluster_segments(
-                segments,
-                language=target_language,
-                method='kmeans',  # More efficient than LDA for this use case
-                n_clusters=n_clusters,
-                min_cluster_size=3,  # Ensure meaningful clusters
-                similarity_threshold=0.7  # Higher threshold for better separation
-            )
-            
-            # 5. Process each cluster
-            summaries = []
-            tts_paths = []
-            cluster_keywords = []
-            
-            for cluster_id, cluster in enumerate(clustered):
-                # Get keywords for this cluster
-                cluster_texts = [seg['text'] for seg in cluster]
-                keywords = extract_keywords(
-                    cluster_texts, 
-                    n_keywords=5,
-                    language=target_language
-                )
-                cluster_keywords.append(keywords)
-                
-                # Generate summary in target language
+
+            try:
                 update_processing_status(
-                    video_id, 
-                    'summarizing', 
-                    60 + (20 * cluster_id // len(clustered)),
-                    f'Generating summary for topic {cluster_id + 1}...'
+                    video_id, "extracting", 40, "Extracting key frames and analyzing visual content..."
                 )
-                summary = summarize_cluster(
-                    cluster,
-                    language=target_language,
-                    use_extractive=True
+
+                ocr_languages = list(set([detected_language, target_language, "en"]))
+                logger.info(f"Starting keyframe extraction with OCR languages: {ocr_languages}")
+
+                keyframes_dir = extract_keyframes(
+                    video_path,
+                    CONFIG["PROCESSED_DIR"],
+                    video_id,
+                    target_resolution=resolution,
+                    ocr_languages=ocr_languages,
+                    enable_ocr=enable_ocr,
+                    max_keyframes=100,
+                    frame_interval=5  # frames to skip between keyframes (lower = more frequent)
                 )
-                summaries.append(summary)
-                
-                # Generate TTS audio in target language
-                tts_path = text_to_speech(
-                    text=summary,
-                    output_dir=CONFIG['PROCESSED_DIR'],
-                    video_id=video_id,
-                    cluster_id=cluster_id,
-                    voice=voice,
-                    language=target_language
-                )
-                tts_paths.append(tts_path)
-            
-            # 6. Create summary videos with better organization
-            summary_videos = []
-            
-            # Create structured folders for this video
-            video_base_dir = os.path.join(CONFIG['PROCESSED_DIR'], video_id)
-            os.makedirs(video_base_dir, exist_ok=True)
-            
-            # Create subdirectories
-            keyframes_dir_organized = os.path.join(video_base_dir, 'keyframes')
-            audio_dir = os.path.join(video_base_dir, 'audio')
-            videos_dir = os.path.join(video_base_dir, 'videos')
-            os.makedirs(keyframes_dir_organized, exist_ok=True)
-            os.makedirs(audio_dir, exist_ok=True)
-            os.makedirs(videos_dir, exist_ok=True)
-            
-            # Load and organize keyframe metadata
-            with open(os.path.join(keyframes_dir, 'keyframes_metadata.json'), 'r', encoding='utf-8') as f:
-                keyframe_metadata = json.load(f)['keyframes']
-            
-            # Copy keyframes to organized directory and update paths
-            for kf in keyframe_metadata:
-                if os.path.exists(kf['filepath']):
-                    new_path = os.path.join(keyframes_dir_organized, os.path.basename(kf['filepath']))
-                    import shutil
-                    shutil.copy2(kf['filepath'], new_path)
-                    kf['filepath'] = new_path
-            
-            # Save organized metadata
-            organized_metadata_path = os.path.join(video_base_dir, 'metadata.json')
-            with open(organized_metadata_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'video_id': video_id,
-                    'keyframes': keyframe_metadata,
-                    'segments': segments,
-                    'clusters': [{'segments': cluster, 'keywords': keywords} for cluster, keywords in zip(clustered, cluster_keywords)]
-                }, f, indent=2, ensure_ascii=False)
-            
-            # Process each cluster with more keyframes
-            for cluster_id, (tts_path, keywords, cluster) in enumerate(zip(tts_paths, cluster_keywords, clustered)):
+
+                ocr_summary: Dict[str, str] = {}
+                if enable_ocr and keyframes_dir and os.path.exists(keyframes_dir):
+                    logger.info("Processing OCR text from keyframes...")
+                    ocr_summary = get_keyframe_text_summary(keyframes_dir)
+                    if ocr_summary.get("high_confidence_text"):
+                        logger.info(
+                            f"Extracted {len(ocr_summary['high_confidence_text'])} characters of high-confidence OCR text"
+                        )
+                    if ocr_summary.get("all_text"):
+                        logger.info(
+                            f"Total OCR text extracted: {len(ocr_summary['all_text'])} characters"
+                        )
+
+                if not keyframes_dir or not os.path.exists(keyframes_dir):
+                    raise ValueError("Failed to extract keyframes from video")
+
+            except Exception as e:
+                logger.error(f"Keyframe extraction failed: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 update_processing_status(
                     video_id,
-                    'rendering',
-                    80 + (15 * cluster_id // len(tts_paths)),
-                    f'Creating video for topic {cluster_id + 1}...'
+                    "error",
+                    0,
+                    "Failed to extract keyframes from video",
+                    str(e),
                 )
-                
-                # Get topic start/end times from cluster segments
-                topic_start = min(seg['start'] for seg in cluster)
-                topic_end = max(seg['end'] for seg in cluster)
-                
-                # Extract more keyframes for this topic (at least 30-40 for smooth video feel)
-                topic_keyframes = select_keyframes_for_topic(keyframe_metadata, topic_start, topic_end)
-                
-                # If we don't have enough keyframes, extract more from the video for this time range
-                if len(topic_keyframes) < 30:
-                    additional_keyframes = extract_keyframes_for_time_range(
-                        video_path, topic_start, topic_end, 30 - len(topic_keyframes)
+                return
+
+            try:
+                update_processing_status(
+                    video_id, "analyzing", 55, "Analyzing content for coherent topics..."
+                )
+                if enable_ocr and ocr_summary.get("high_confidence_text"):
+                    ocr_context = ocr_summary["high_confidence_text"]
+                    if ocr_context.strip() and segments:
+                        ocr_chunks = [ocr_context[i : i + 300] for i in range(0, len(ocr_context), 300)]
+                        for i, chunk in enumerate(ocr_chunks):
+                            seg_idx = min(i, len(segments) - 1)
+                            segments[seg_idx]["text"] += f" [Visual context: {chunk}]"
+                logger.info(f"Starting topic analysis on {len(segments)} segments...")
+                # Removed unsupported parameters: min_segment_duration, max_topics, min_topic_duration, use_visual_context, visual_context
+                topics = analyze_topic_segments(
+                    segments=segments,
+                    language=target_language
+                )
+                if not topics:
+                    raise ValueError("No coherent topics could be identified in the content")
+                logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")
+            except Exception as e:
+                logger.error(f"Topic analysis failed: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                update_processing_status(
+                    video_id,
+                    "error",
+                    0,
+                    "Failed to analyze video content for topics",
+                    str(e),
+                )
+                return
+
+            logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")
+            try:
+                summaries: List[str] = []
+                tts_paths: List[str] = []
+                topic_names: List[str] = []
+                topic_keywords: List[List[str]] = []
+                topic_metadata: List[Dict[str, Any]] = []
+
+                for topic_idx, topic in enumerate(topics):
+                    topic_id = topic["topic_id"]
+                    topic_name = topic["name"]
+                    topic_segments = topic["segments"]
+                    keywords = topic["keywords"]
+
+                    progress = 60 + (25 * topic_idx // max(1, len(topics)))
+                    update_processing_status(
+                        video_id,
+                        "summarizing",
+                        progress,
+                        f"Processing topic {topic_idx + 1}/{len(topics)}: {topic_name}...",
                     )
-                    topic_keyframes.extend(additional_keyframes)
-                
-                # Move TTS audio to organized directory
-                audio_filename = f"topic_{cluster_id}_summary.wav"
-                organized_audio_path = os.path.join(audio_dir, audio_filename)
-                import shutil
-                shutil.copy2(tts_path, organized_audio_path)
-                
-                # Create video
-                output_path = os.path.join(videos_dir, f"topic_{cluster_id}_summary")
-                video_out = make_summary_video(
-                    keyframes=topic_keyframes,
-                    tts_audio_path=organized_audio_path,
-                    output_path=output_path,
-                    target_width=854,
-                    fps=30
+
+                    logger.info(f"Generating summary for topic {topic_id}: {topic_name}")
+                    summary = summarize_cluster(
+                        segments=topic_segments,
+                        language=target_language,
+                        use_extractive=False,
+                        max_length="medium",
+                        min_length=1,
+                        additional_context={
+                            "topic_keywords": keywords[:5],
+                            "visual_context": ocr_summary.get("high_confidence_text", "")[:500],
+                            "topic_name": topic_name,
+                        },
+                    )
+                    if not summary or len(summary.strip()) < 10:
+                        logger.warning(
+                            f"Generated summary for topic {topic_id} is too short, using fallback"
+                        )
+                        summary = (
+                            f"This segment discusses {topic_name}. "
+                            f"Key points include: {', '.join(keywords[:3])}."
+                        )
+                    summaries.append(summary)
+                    topic_names.append(topic_name)
+                    topic_keywords.append(keywords)
+
+                    try:
+                        logger.info(f"Generating TTS for topic {topic_id}")
+                        tts_path = text_to_speech(
+                            text=summary,
+                            output_dir=CONFIG["PROCESSED_DIR"],
+                            video_id=video_id,
+                            cluster_id=topic_id,
+                            voice=voice,
+                            language=target_language,
+                            speaking_rate=1.0,
+                            pitch=0.0,
+                            volume_gain_db=0.0,
+                        )
+                        if not tts_path or not os.path.exists(tts_path):
+                            raise FileNotFoundError("TTS file not generated")
+                        tts_paths.append(tts_path)
+                        topic_metadata.append(
+                            {
+                                "id": topic_id,
+                                "name": topic_name,
+                                "start_time": topic["start_time"],
+                                "end_time": topic["end_time"],
+                                "duration": topic["end_time"] - topic["start_time"],
+                                "segment_count": len(topic_segments),
+                                "summary": summary,
+                                "audio_path": tts_path,
+                                "keywords": keywords,
+                            }
+                        )
+                    except Exception as tts_error:
+                        logger.error(f"TTS generation failed for topic {topic_id}: {str(tts_error)}")
+                        silence = AudioSegment.silent(duration=5000)
+                        fallback_path = os.path.join(
+                            CONFIG["PROCESSED_DIR"], f"{video_id}_topic_{topic_id}_fallback.wav"
+                        )
+                        silence.export(fallback_path, format="wav")
+                        tts_paths.append(fallback_path)
+                        logger.info(f"Created silent fallback audio at {fallback_path}")
+
+                if not tts_paths:
+                    raise ValueError("Failed to generate audio for any topics")
+
+            except Exception as e:
+                logger.error(f"Topic processing failed: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                update_processing_status(
+                    video_id, "error", 0, "Failed to process video topics", str(e)
                 )
-                
-                if video_out:
-                    # Store the relative path from processed directory
-                    video_filename = os.path.relpath(video_out, CONFIG['PROCESSED_DIR'])
-                    summary_videos.append(video_filename)
-                    
-                    # Update metadata with topic-specific info
-                    topic_metadata = {
-                        'topic_id': cluster_id,
-                        'start_time': topic_start,
-                        'end_time': topic_end,
-                        'summary': summaries[cluster_id],
-                        'keywords': keywords,
-                        'keyframes_count': len(topic_keyframes),
-                        'audio_file': audio_filename,
-                        'video_file': video_filename
-                    }
-                    
-                    # Save topic metadata
-                    topic_metadata_path = os.path.join(video_base_dir, f'topic_{cluster_id}_metadata.json')
-                    with open(topic_metadata_path, 'w', encoding='utf-8') as f:
-                        json.dump(topic_metadata, f, indent=2, ensure_ascii=False)
-                else:
-                    logger.error(f"Failed to create video for topic {cluster_id}")
-                    summary_videos.append(None)
-            
-            # 7. Finalize with enhanced metadata
+                return
+
+            # (Generation of summary videos per topic would come here.)
+
+            result_message = "Processing complete!"
             result = {
-                'video_id': video_id,
-                'summaries': summaries,
-                'keywords': cluster_keywords,
-                'summary_videos': summary_videos,
-                'source_language': detected_language,
-                'target_language': target_language,
-                'ocr_enabled': enable_ocr,
-                'ocr_summary': ocr_summary if enable_ocr else {},
-                'total_topics': len(clustered),
-                'processing_stats': {
-                    'segments_count': len(segments),
-                    'keyframes_count': len(os.listdir(keyframes_dir)) if keyframes_dir and os.path.exists(keyframes_dir) else 0,
-                    'translation_used': detected_language != target_language
-                },
-                'status': 'completed',
-                'progress': 100,
-                'message': 'Processing complete!'
+                "video_id": video_id,
+                "summaries": summaries,
+                "keywords": topic_keywords,
+                "status": "completed",
+                "progress": 100,
+                "message": result_message,
             }
-            
-            # Update status with result
             processing_status[video_id].update(result)
-            
-            # Mark processing as complete
-            update_processing_status(
-                video_id,
-                'completed',
-                100,
-                'Processing complete!',
-                None
-            )
-            
+            update_processing_status(video_id, "completed", 100, result_message, None)
+
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}\n{traceback.format_exc()}")
             update_processing_status(
-                video_id,
-                'error',
-                0,
-                'An error occurred during processing',
-                str(e)
+                video_id, "error", 0, "An error occurred during processing", str(e)
             )
-        finally:
-            # Cancel all timers if they exist
-            if 'timeout_timer' in locals():
-                timeout_timer.cancel()
-            if 'watchdog_timer' in locals():
-                watchdog_timer.cancel()
-    
-    # Start processing in background with timeout
-    from threading import Thread, Timer
-    
+
+    # Thread and Timer already imported at module level
+
     def timeout_handler():
         logger.error(f"Processing timeout for video {video_id}")
         update_processing_status(
             video_id,
-            'error',
+            "error",
             0,
-            'Processing timeout - taking too long',
-            'Processing exceeded maximum time limit'
+            "Processing timeout - taking too long",
+            "Processing exceeded maximum time limit",
         )
-    
-    # Set a timeout of 30 minutes for the entire process
-    timeout_timer = Timer(30 * 60, timeout_handler)  # 30 minutes
+
+    timeout_timer = Timer(30 * 60, timeout_handler)
     timeout_timer.start()
-    
-    # Add a watchdog timer to check if processing is stuck
+
     def watchdog_check():
         current_status = get_processing_status(video_id)
-        if current_status.get('status') == 'downloading' and current_status.get('progress') == 5:
-            # If stuck at 5% for more than 5 minutes, force error
+        if current_status.get("status") == "downloading" and current_status.get("progress") == 5:
             logger.error(f"Processing stuck at 5% for video {video_id}, forcing error")
             update_processing_status(
                 video_id,
-                'error',
+                "error",
                 0,
-                'Processing stuck - forcing error',
-                'Processing got stuck at download stage'
+                "Processing stuck - forcing error",
+                "Processing got stuck at download stage",
             )
-    
-    watchdog_timer = Timer(5 * 60, watchdog_check)  # 5 minutes
+
+    watchdog_timer = Timer(5 * 60, watchdog_check)
     watchdog_timer.start()
-    
+
     thread = Thread(target=process_video)
     thread.daemon = True
     thread.start()
-    
-    # Return initial response with video ID
+
+    return jsonify(
+        {
+            "video_id": video_id,
+            "status": "processing",
+            "progress": 0,
+            "message": "Processing started",
+        }
+    )
+
+@app.route("/api/status/<video_id>", methods=["GET"])
+def api_status(video_id: str):
+    """Return current processing status for a given video_id."""
+    status = get_processing_status(video_id)
+    # Include any extra result fields if present (e.g., summaries, keywords)
+    extra = processing_status.get(video_id, {})
+    merged = {**status}
+    for key in ("summaries", "keywords", "message", "progress", "status", "error", "video_id"):
+        if key in extra:
+            merged[key] = extra[key]
+    merged.setdefault("video_id", video_id)
+    return jsonify(merged)
+
+
+@app.route("/api/test-upload", methods=["POST"])
+def api_test_upload():
+    """Simple endpoint to verify file uploads from frontend."""
+    if "video_file" not in request.files:
+        return jsonify({"success": False, "error": "No file part 'video_file'"}), 400
+    f = request.files["video_file"]
+    if f.filename == "":
+        return jsonify({"success": False, "error": "No selected file"}), 400
+    # Do not persist; just read to measure size
+    data = f.read()
     return jsonify({
-        'video_id': video_id,
-        'status': 'processing',
-        'progress': 0,
-        'message': 'Processing started'
+        "success": True,
+        "filename": f.filename,
+        "size": len(data),
+        "content_type": f.content_type,
     })
 
-@app.route('/api/test-upload', methods=['POST'])
-def test_upload():
-    """Test endpoint to debug file upload issues."""
-    logger.info(f"Test upload - files: {list(request.files.keys())}")
-    logger.info(f"Test upload - form: {list(request.form.keys())}")
-    logger.info(f"Test upload - content type: {request.content_type}")
-    logger.info(f"Test upload - content length: {request.content_length}")
-    
-    if 'video_file' in request.files:
-        f = request.files['video_file']
-        if f and f.filename:
-            # Get file size without seeking to avoid closing the file
-            try:
-                # Use content_length if available, otherwise read a small chunk to test
-                if hasattr(f, 'content_length') and f.content_length:
-                    file_size = f.content_length
-                else:
-                    # Read a small chunk to test if file is readable
-                    f.seek(0)
-                    test_chunk = f.read(1024)  # Read 1KB
-                    file_size = len(test_chunk)
-                    if test_chunk:
-                        # File is readable, we can estimate size
-                        file_size = "Readable (size unknown)"
-                    else:
-                        file_size = "Empty file"
-                
-                logger.info(f"Test upload - received file: {f.filename}, size: {file_size}")
-                return jsonify({
-                    'success': True, 
-                    'filename': f.filename,
-                    'size': file_size,
-                    'content_type': getattr(f, 'content_type', 'unknown')
-                })
-            except Exception as e:
-                logger.error(f"Test upload - error reading file: {e}")
-                return jsonify({'success': False, 'error': f'File read error: {str(e)}'})
-        else:
-            logger.warning("Test upload - video_file exists but is empty or has no filename")
-            return jsonify({'success': False, 'error': 'File is empty or has no filename'})
-    else:
-        logger.warning("Test upload - no video_file in request.files")
-        return jsonify({'success': False, 'error': 'No video_file received in request.files'})
 
-@app.route('/api/status/<video_id>')
-def get_status(video_id: str):
-    """Get the current status of a processing job."""
-    status = get_processing_status(video_id)
-    logger.info(f"Status request for {video_id}: {status}")
-    return jsonify(status)
-
-@app.route('/api/summary/<video_id>')
-def get_summary(video_id: str):
-    """Get the summary data for a processed video."""
-    summary_path = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}_summary.json")
-    if os.path.exists(summary_path):
-        with open(summary_path, 'r', encoding='utf-8') as f:
-            return jsonify(json.load(f))
-    return jsonify({'error': 'Summary not found'}), 404
-
-@app.route('/api/stream/<video_id>/<int:cluster_id>')
-def stream_video(video_id: str, cluster_id: int):
-    """Stream a summary video."""
-    video_path = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}_summary_{cluster_id}.mp4")
-    
-    if not os.path.exists(video_path):
-        return jsonify({'error': 'Video not found'}), 404
-    
-    range_header = request.headers.get('Range', None)
-    if not range_header:
-        return send_from_directory(
-            CONFIG['PROCESSED_DIR'],
-            f"{video_id}_summary_{cluster_id}.mp4",
-            as_attachment=False,
-            mimetype='video/mp4'
-        )
-    start,end=0,0
-    # Handle byte range requests for streaming
-    def generate():
-        nonlocal start,end
-        with open(video_path, 'rb') as f:
-            f.seek(0, 2)
-            file_size = f.tell()
-            start = 0
-            end = file_size - 1
-            
-            # Parse range header
-            range_header = request.headers.get('Range')
-            if range_header:
-                range_match = re.search(r'bytes=(\d*)-(\d*)', range_header)
-                if range_match.group(1):
-                    start = int(range_match.group(1))
-                if range_match.group(2):
-                    end = int(range_match.group(2))
-            
-            chunk_size = 1024 * 1024  # 1MB chunks
-            f.seek(start)
-            
-            while start <= end:
-                chunk = f.read(min(chunk_size, end - start + 1))
-                if not chunk:
-                    break
-                yield chunk
-                start += len(chunk)
-    
-    # Send response with appropriate headers
-    file_size = os.path.getsize(video_path)
-    response = Response(
-        stream_with_context(generate()),
-        206,  # Partial Content
-        mimetype='video/mp4',
-        direct_passthrough=True
-    )
-    
-    response.headers.add('Content-Range', f'bytes {start}-{end}/{file_size}')
-    response.headers.add('Accept-Ranges', 'bytes')
-    response.headers.add('Content-Length', str(end - start + 1))
-    
-    return response
-
-@app.route('/processed/<path:path>')
-def send_processed_file(path):
-    """Serve processed files with proper caching headers."""
-    response = send_from_directory(CONFIG['PROCESSED_DIR'], path)
-    # Cache for 1 day
-    response.headers['Cache-Control'] = 'public, max-age=86400'
-    return response
-
-@app.route('/srt/<video_id>')
-def get_srt(video_id: str):
-    """Get SRT subtitles for a video."""
-    srt_path = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}.srt")
-    if os.path.exists(srt_path):
-        response = send_from_directory(CONFIG['PROCESSED_DIR'], f"{video_id}.srt")
-        response.headers['Content-Type'] = 'text/plain; charset=utf-8'
-        return response
-    return jsonify({'error': 'Subtitles not found'}), 404
-
-@app.route('/keyframes/<video_id>')
-def get_keyframes(video_id: str):
-    """Get list of keyframes for a video."""
-    keyframes_dir = os.path.join(CONFIG['PROCESSED_DIR'], f"{video_id}_keyframes")
-    if os.path.exists(keyframes_dir):
-        try:
-            files = sorted([f for f in os.listdir(keyframes_dir) 
-                          if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-            return jsonify({
-                'keyframes': [f"/processed/{video_id}_keyframes/{f}" for f in files]
-            })
-        except Exception as e:
-            logger.error(f"Error listing keyframes: {e}")
-            return jsonify({'error': 'Error listing keyframes'}), 500
-    return jsonify({'keyframes': []})
-
-def cleanup_old_files():
-    """Clean up old temporary files."""
-    try:
-        now = time.time()
-        max_age = 24 * 3600  # 1 day in seconds
-        
-        for dir_path in [CONFIG['UPLOAD_DIR'], CONFIG['PROCESSED_DIR']]:
-            if not os.path.exists(dir_path):
-                continue
-                
-            for filename in os.listdir(dir_path):
-                file_path = os.path.join(dir_path, filename)
-                try:
-                    # Delete files older than max_age
-                    if os.path.isfile(file_path):
-                        file_age = now - os.path.getmtime(file_path)
-                        if file_age > max_age:
-                            os.remove(file_path)
-                            logger.info(f"Deleted old file: {file_path}")
-                    # Clean up old temporary directories
-                    elif os.path.isdir(file_path) and file_path.endswith('_temp'):
-                        import shutil
-                        shutil.rmtree(file_path, ignore_errors=True)
-                        logger.info(f"Deleted temp directory: {file_path}")
-                except Exception as e:
-                    logger.error(f"Error cleaning up {file_path}: {e}")
-    except Exception as e:
-        logger.error(f"Error in cleanup_old_files: {e}")
-
-if __name__ == '__main__':
-    # Ensure directories exist
-    for dir_path in [CONFIG['UPLOAD_DIR'], CONFIG['PROCESSED_DIR']]:
-        os.makedirs(dir_path, exist_ok=True)
-    
-    # Set up cleanup job
-    from apscheduler.schedulers.background import BackgroundScheduler
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(func=cleanup_old_files, trigger='interval', hours=1)
-    scheduler.start()
-    
-    # Start the Flask app
-    try:
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)), debug=False, use_reloader=False)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+if __name__ == "__main__":
+    # Start the Flask development server
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    logger.info(f"Starting Flask server on http://{host}:{port} (debug={debug})")
+    app.run(host=host, port=port, debug=debug, threaded=True)

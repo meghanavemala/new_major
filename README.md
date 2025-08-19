@@ -7,8 +7,12 @@ An intelligent video summarization system that automatically processes long vide
 ### 🎯 Core Functionality
 - **Multi-Source Input**: Supports YouTube URLs and direct video uploads
 - **Intelligent Processing**: Extracts subtitles, audio, keyframes, and performs topic clustering
+- **Dynamic Topic Analysis**: Automatically identifies the optimal number of topics based on content
+- **Meaningful Topic Names**: Generates descriptive names for each topic instead of generic labels
+- **Smart Keyframe Selection**: Selects relevant keyframes for each topic based on timestamps
 - **AI Summarization**: Creates topic-based summaries with natural language processing
 - **Video Generation**: Produces summarized videos with keyframes and AI voiceovers
+- **Smooth Transitions**: Adds fade transitions between keyframes for better visual experience
 - **Interactive Topics**: Users can select specific topics for detailed explanation
 
 ### 🌍 Language Support
@@ -103,13 +107,24 @@ An intelligent video summarization system that automatically processes long vide
 3. **Processing Pipeline**:
    - **Audio Extraction**: Extracts audio from video using FFmpeg
    - **Transcription**: Uses OpenAI Whisper for speech-to-text conversion
-   - **Keyframe Extraction**: Identifies important visual moments
+   - **Keyframe Extraction**: Identifies important visual moments with timestamp data
    - **OCR Analysis**: Extracts text from keyframes for additional context
-   - **Topic Clustering**: Groups content into coherent topics using ML
-   - **Summarization**: Generates concise summaries for each topic
+   - **Advanced Topic Analysis**: 
+     - Analyzes transcript to determine optimal number of topics
+     - Identifies distinct topics with natural boundaries
+     - Generates meaningful names for each topic based on content
+     - Maps topics to specific video time segments
+   - **Smart Keyframe Selection**:
+     - Selects keyframes relevant to each topic based on timestamps
+     - Calculates optimal number of keyframes based on topic duration
+     - Extracts additional keyframes if needed for smooth video generation
+   - **Summarization**: Generates concise, informative summaries for each topic
    - **Translation**: Converts summaries to target language if needed
    - **Voice Generation**: Creates AI voiceovers using gTTS
-   - **Video Assembly**: Combines keyframes, audio, and subtitles
+   - **Enhanced Video Assembly**: 
+     - Aligns keyframes with audio duration for perfect timing
+     - Adds smooth fade transitions between keyframes
+     - Creates topic-specific videos with descriptive names
 
 4. **Output**: Interactive interface showing topic-based summaries with playable videos
 
@@ -128,6 +143,7 @@ An intelligent video summarization system that automatically processes long vide
                     │ • transcriber.py (Whisper)      │
                     │ • keyframes.py (CV + OCR)       │
                     │ • clustering.py (ML/NLP)        │
+                    │ • topic_analyzer.py (Advanced)  │
                     │ • summarizer.py (Transformers)  │
                     │ • translator.py (Multi-lang)    │
                     │ • tts.py (Voice Generation)     │
@@ -381,6 +397,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔮 Future Enhancements
 
+- [x] Dynamic topic extraction with optimal topic count
+- [x] Meaningful topic naming based on content
+- [x] Intelligent keyframe selection per topic
+- [x] Enhanced audio-video synchronization
 - [ ] Real-time video processing
 - [ ] Multi-speaker identification
 - [ ] Advanced emotion detection

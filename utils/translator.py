@@ -278,119 +278,225 @@ def translate_segments(
     source_lang: str, 
     target_lang: str,
     method: str = 'auto',
-    max_workers: int = 5   # number of parallel threads
+    max_workers: int = 5,   # number of parallel threads
+    fallback_to_google: bool = True  # Whether to fall back to Google Translate if default fails
 ) -> List[Dict]:
     """
     Translate text segments from source to target language with multithreading.
+    Supports bidirectional translation between all specified languages.
+    Defaults to M2M100 for offline use with Google Translate as fallback.
 
     Args:
         segments: List of segment dictionaries with 'text' field
-        source_lang: Source language
-        target_lang: Target language
-        method: Translation method to use
+        source_lang: Source language code or name (e.g., 'hi', 'hindi')
+        target_lang: Target language code or name (e.g., 'en', 'english')
+        method: Translation method to use ('auto', 'google', 'm2m100', 'marian')
         max_workers: Number of threads for parallel translation
+        fallback_to_google: Whether to fall back to Google Translate if default fails
 
     Returns:
-        List of segments with translated text
+        List of segments with translated text and metadata
     """
     if not segments:
+        return []
+
+    # Normalize language codes to ISO 639-1
+    def normalize_lang(lang: str) -> str:
+        """Convert language name to ISO code if needed."""
+        if not lang:
+            return 'en'  # Default to English
+        
+        # Check if it's already an ISO code
+        if len(lang) == 2 and any(lang.lower() == lc for lc in [v['code'] for v in LANGUAGE_MAPPINGS.values()]):
+            return lang.lower()
+            
+        # Try to find matching language
+        lang_lower = lang.lower()
+        for name, data in LANGUAGE_MAPPINGS.items():
+            if (lang_lower == name.lower() or 
+                lang_lower == data['code'].lower() or 
+                lang_lower == data.get('google', '').lower() or
+                lang_lower == data.get('native', '').lower()):
+                return data['code']
+        
+        logger.warning(f"Unrecognized language: {lang}, defaulting to English")
+        return 'en'
+
+    source_lang = normalize_lang(source_lang)
+    target_lang = normalize_lang(target_lang)
+
+    # If source and target languages are the same, return as is
+    if source_lang == target_lang:
         return segments
+
+    # Method resolution - prefer M2M100 as default offline option
+    if method == 'auto':
+        methods = ['m2m100']  # Default to M2M100 first
+        if fallback_to_google and GOOGLETRANS_AVAILABLE:
+            methods.append('google_translate')
+        methods.append('marian')  # Fallback to Marian if available
+    else:
+        methods = [method]
+        if fallback_to_google and 'google_translate' not in methods and GOOGLETRANS_AVAILABLE:
+            methods.append('google_translate')
+
+    # Prepare segments for translation
+    segments_to_translate = []
+    for seg in segments:
+        text = seg.get('text', '').strip()
+        if text:
+            segments_to_translate.append({
+                **seg,
+                '_original_text': text,
+                'source_lang': source_lang,
+                'target_lang': target_lang,
+                'translation_method': None,
+                'translation_error': None
+            })
+
+    # Skip if no segments to translate
+    if not segments_to_translate:
+        return segments
+
+    # Try each method until one succeeds
+    translated_segments = None
+    used_method = None
     
-    logger.info(f"Translating {len(segments)} segments from {source_lang} to {target_lang}")
+    for method_try in methods:
+        try:
+            logger.info(f"Attempting translation with {method_try} ({source_lang}->{target_lang})")
+            
+            if method_try == 'google_translate' and GOOGLETRANS_AVAILABLE:
+                translated = []
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [
+                        executor.submit(
+                            translate_with_google, 
+                            seg['_original_text'], 
+                            source_lang, 
+                            target_lang
+                        )
+                        for seg in segments_to_translate
+                    ]
+                    
+                    for future, seg in zip(as_completed(futures), segments_to_translate):
+                        translated_text = future.result()
+                        if translated_text:
+                            translated.append({
+                                **seg,
+                                'text': translated_text,
+                                'translation_method': 'google_translate',
+                                'translation_error': None
+                            })
+                        else:
+                            translated.append({
+                                **seg,
+                                'translation_error': 'Google Translate failed',
+                                'translation_method': None
+                            })
+                
+                # Only consider successful if we got at least one translation
+                if any(seg.get('translation_method') == 'google_translate' for seg in translated):
+                    translated_segments = translated
+                    used_method = 'google_translate'
+                    break
 
-    translated_segments = [None] * len(segments)  # placeholder for results
-    translation_stats = {'success': 0, 'failed': 0, 'methods': {}}
+            elif method_try == 'm2m100':
+                translated = []
+                model, tokenizer = get_m2m100_model()
+                if not model or not tokenizer:
+                    logger.warning("M2M100 model not available")
+                    continue
+                
+                # Get language codes for M2M100
+                src_code = LANGUAGE_MAPPINGS.get(source_lang, {}).get('code', source_lang)
+                tgt_code = LANGUAGE_MAPPINGS.get(target_lang, {}).get('code', target_lang)
+                
+                # Process in batches for efficiency
+                batch_size = min(8, max(1, max_workers))
+                for i in range(0, len(segments_to_translate), batch_size):
+                    batch = segments_to_translate[i:i+batch_size]
+                    texts = [seg['_original_text'] for seg in batch]
+                    
+                    try:
+                        # Set source language
+                        tokenizer.src_lang = src_code
+                        
+                        # Tokenize input
+                        inputs = tokenizer(
+                            texts, 
+                            return_tensors="pt", 
+                            padding=True, 
+                            truncation=True, 
+                            max_length=512
+                        )
+                        
+                        # Move to same device as model
+                        device = next(model.parameters()).device
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        # Generate translation
+                        with torch.no_grad():
+                            generated_tokens = model.generate(
+                                **inputs,
+                                forced_bos_token_id=tokenizer.lang_code_to_id[tgt_code],
+                                max_length=512
+                            )
+                        
+                        # Decode the generated tokens
+                        translated_texts = tokenizer.batch_decode(
+                            generated_tokens, 
+                            skip_special_tokens=True
+                        )
+                        
+                        # Update segments with translations
+                        for seg, trans_text in zip(batch, translated_texts):
+                            translated.append({
+                                **seg,
+                                'text': trans_text,
+                                'translation_method': 'm2m100',
+                                'translation_error': None
+                            })
+                            
+                    except Exception as e:
+                        logger.error(f"M2M100 batch translation failed: {e}")
+                        # Add untranslated segments with error
+                        translated.extend([
+                            {**seg, 'translation_error': f'M2M100: {str(e)}'}
+                            for seg in batch
+                        ])
+                
+                # Only consider successful if we got translations
+                if any(seg.get('translation_method') == 'm2m100' for seg in translated):
+                    translated_segments = translated
+                    used_method = 'm2m100'
+                    break
 
-    def translate_one(index, segment):
-        original_text = segment.get('text', '')
-        if not original_text.strip():
-            return index, segment.copy()
+        except Exception as e:
+            logger.error(f"Translation with {method_try} failed: {e}", exc_info=True)
+            continue
 
-        translated_text, method_used = translate_text(
-            original_text, source_lang, target_lang, method
+    # If all methods failed, return original segments with error flags
+    if translated_segments is None:
+        logger.error(f"All translation methods failed for {source_lang}->{target_lang}")
+        return [
+            {
+                **seg, 
+                'translation_error': 'All translation methods failed',
+                'translation_method': None
+            }
+            for seg in segments
+        ]
+
+    # Log successful translation
+    success_count = sum(1 for seg in translated_segments if seg.get('translation_method'))
+    if used_method and success_count > 0:
+        logger.info(
+            f"Successfully translated {success_count}/{len(segments_to_translate)} "
+            f"segments using {used_method} ({source_lang}->{target_lang})"
         )
-
-        # stats
-        if method_used != 'failed':
-            translation_stats['success'] += 1
-            translation_stats['methods'][method_used] = translation_stats['methods'].get(method_used, 0) + 1
-        else:
-            translation_stats['failed'] += 1
-
-        new_segment = segment.copy()
-        new_segment['text'] = translated_text
-        new_segment['original_text'] = original_text
-        new_segment['translation_method'] = method_used
-
-        return index, new_segment
-
-    # Run translations in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(translate_one, i, seg) for i, seg in enumerate(segments)]
-        for future in as_completed(futures):
-            idx, translated_seg = future.result()
-            translated_segments[idx] = translated_seg
-
-    logger.info(f"Translation complete: {translation_stats['success']} successful, {translation_stats['failed']} failed")
-    logger.info(f"Methods used: {translation_stats['methods']}")
     
     return translated_segments
-
-
-# def translate_segments(
-#     segments: List[Dict], 
-#     source_lang: str, 
-#     target_lang: str,
-#     method: str = 'auto'
-# ) -> List[Dict]:
-#     """
-#     Translate text segments from source to target language.
-    
-#     Args:
-#         segments: List of segment dictionaries with 'text' field
-#         source_lang: Source language
-#         target_lang: Target language
-#         method: Translation method to use
-        
-#     Returns:
-#         List of segments with translated text
-#     """
-#     if not segments:
-#         return segments
-    
-#     logger.info(f"Translating {len(segments)} segments from {source_lang} to {target_lang}")
-    
-#     translated_segments = []
-#     translation_stats = {'success': 0, 'failed': 0, 'methods': {}}
-    
-#     for i, segment in enumerate(segments):
-#         original_text = segment.get('text', '')
-        
-#         if not original_text.strip():
-#             translated_segments.append(segment.copy())
-#             continue
-        
-#         # Translate the text
-#         translated_text, method_used = translate_text(
-#             original_text, source_lang, target_lang, method
-#         )
-        
-#         # Update statistics
-#         if method_used not in ['failed']:
-#             translation_stats['success'] += 1
-#             translation_stats['methods'][method_used] = translation_stats['methods'].get(method_used, 0) + 1
-#         else:
-#             translation_stats['failed'] += 1
-        
-#         # Create new segment with translated text
-#         new_segment = segment.copy()
-#         new_segment['text'] = translated_text
-#         new_segment['original_text'] = original_text
-#         new_segment['translation_method'] = method_used
-        
-#         translated_segments.append(new_segment)
-        
-#         # Progress logging
 #         if (i + 1) % 10 == 0:
 #             logger.info(f"Translated {i + 1}/{len(segments)} segments")
     
