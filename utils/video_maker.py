@@ -423,7 +423,7 @@ def make_summary_video(
     if first_img is None:
         logger.error(f"Failed to read image: {keyframes[0]['filepath']}")
         return None
-    first_img = resize_frame(first_img, target_width)
+    first_img = resize_frame(first_img, target_size=resolution)
     height, width = first_img.shape[:2]
     
     # Output paths

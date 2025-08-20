@@ -38,6 +38,10 @@ const videoDescription = document.getElementById('videoDescription');
 const downloadButtons = document.getElementById('downloadButtons');
 const errorMessage = document.getElementById('errorMessage');
 const successMessage = document.getElementById('successMessage');
+// Final summary elements
+const finalSummarySection = document.getElementById('finalSummarySection');
+const finalSummaryPlayer = document.getElementById('finalSummaryPlayer');
+const finalSummaryDownload = document.getElementById('finalSummaryDownload');
 
 // Step elements
 const steps = {
@@ -50,6 +54,12 @@ const steps = {
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
+    // Refresh hint with backend-provided limit (if needed)
+    try {
+        const hint = document.querySelector('#fileUploadArea .upload-hint');
+        const maxMB = Math.floor(getMaxFileSizeBytes() / (1024 * 1024));
+        if (hint) hint.textContent = `MP4, AVI, MOV, MKV, WEBM (Max ${maxMB}MB)`;
+    } catch (_) {}
     initializeFileUpload();
     initializeForm();
 });
@@ -130,8 +140,10 @@ function validateForm() {
         return false;
     }
     
-    if (videoFile && videoFile.size > 100 * 1024 * 1024) {
-        showError('Video file size must be less than 40MB.');
+    const maxBytes = getMaxFileSizeBytes();
+    if (videoFile && videoFile.size > maxBytes) {
+        const maxMB = Math.floor(maxBytes / (1024 * 1024));
+        showError(`Video file size must be less than or equal to ${maxMB}MB.`);
         return false;
     }
     
@@ -170,11 +182,23 @@ async function submitForm() {
             method: 'POST',
             body: formData
         });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        // Explicitly handle payload too large
+        if (response.status === 413) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            const msg = (data && (data.message || data.error)) ? (data.message || data.error) : 'File too large';
+            showError(msg);
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-play"></i> Start Processing';
+            return;
         }
-        
+
+        if (!response.ok) {
+            let text = '';
+            try { text = await response.text(); } catch (_) {}
+            throw new Error(text || `HTTP error! status: ${response.status}`);
+        }
+
         const result = await response.json();
         
         if (result.error) {
@@ -203,29 +227,47 @@ async function testUpload() {
         
         const formData = new FormData();
         
-        // Get the video file
+        // Support either file or YouTube URL for testing
         const videoFile = document.getElementById('video_file').files[0];
-        if (!videoFile) {
-            showError('Please select a video file first.');
+        const ytUrl = document.getElementById('yt_url').value.trim();
+        
+        if (videoFile) {
+            formData.append('video_file', videoFile);
+            console.log('Test upload - File being sent:', videoFile.name, videoFile.size);
+        } else if (ytUrl) {
+            formData.append('yt_url', ytUrl);
+            console.log('Test upload - URL being sent:', ytUrl);
+        } else {
+            showError('Please provide a YouTube URL or select a video file first.');
             testBtn.disabled = false;
             testBtn.innerHTML = '<i class="fas fa-bug"></i> Test Upload';
             return;
         }
         
-        // Add the file to FormData
-        formData.append('video_file', videoFile);
-        
-        console.log('Test upload - File being sent:', videoFile.name, videoFile.size);
-        
         const response = await fetch('/api/test-upload', {
             method: 'POST',
             body: formData
         });
-        
+        // Handle payload too large
+        if (response.status === 413) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            const msg = (data && (data.message || data.error)) ? (data.message || data.error) : 'File too large';
+            showError(msg);
+            return;
+        }
+
         const result = await response.json();
         
         if (result.success) {
-            showSuccess(`Test successful! File: ${result.filename}, Size: ${(result.size / 1024 / 1024).toFixed(2)} MB`);
+            if (result.type === 'file') {
+                showSuccess(`Video uploaded! File: ${result.filename}, Size: ${(result.size / 1024 / 1024).toFixed(2)} MB`);
+            } else if (result.type === 'url') {
+                const label = result.title || result.yt_url || 'YouTube URL';
+                showSuccess(`Video uploaded (URL): ${label}`);
+            } else {
+                showSuccess('Video input accepted for processing.');
+            }
             console.log('Test upload result:', result);
         } else {
             showError(`Test failed: ${result.error}`);
@@ -389,6 +431,31 @@ function showResults(data) {
     
     // Store video data globally for access in other functions
     window.currentVideoData = data;
+    // Show final summary video if available
+    try {
+        if (data.final_summary_video) {
+            const fname = getBasenameFromPath(data.final_summary_video);
+            if (fname) {
+                const url = `/processed/${fname}`;
+                if (finalSummaryPlayer) {
+                    finalSummaryPlayer.src = url;
+                    // Ensure the source element updates too for better compatibility
+                    const srcEl = finalSummaryPlayer.querySelector('source');
+                    if (srcEl) srcEl.src = url;
+                    finalSummaryPlayer.load();
+                }
+                if (finalSummaryDownload) {
+                    finalSummaryDownload.href = url;
+                    finalSummaryDownload.download = fname;
+                }
+                if (finalSummarySection) finalSummarySection.style.display = 'block';
+            }
+        } else if (finalSummarySection) {
+            finalSummarySection.style.display = 'none';
+        }
+    } catch (e) {
+        console.warn('Failed to set final summary video UI:', e);
+    }
     
     // Check if we have the required data
     if (data.summaries && data.summaries.length > 0) {
@@ -460,18 +527,19 @@ function createTopicCard(summary, keywords, index, data) {
 function populateDownloadButtons(data) {
     downloadButtons.innerHTML = '';
     
-    if (!data.summary_videos || data.summary_videos.length === 0) {
+    if (!data.topic_videos || data.topic_videos.length === 0) {
         downloadButtons.innerHTML = '<p>No videos available for download.</p>';
         return;
     }
     
-    data.summary_videos.forEach((videoPath, index) => {
-        if (videoPath) {
+    data.topic_videos.forEach((tv, index) => {
+        if (tv && tv.video_filename) {
             const downloadBtn = document.createElement('a');
-            downloadBtn.href = `/processed/${videoPath}`;
+            downloadBtn.href = `/processed/${tv.video_filename}`;
             downloadBtn.className = 'btn btn-secondary';
-            downloadBtn.download = `topic_${index + 1}_summary.mp4`;
-            downloadBtn.innerHTML = `<i class="fas fa-download"></i> Topic ${index + 1}`;
+            const label = tv.name ? `Topic ${index + 1}: ${tv.name}` : `Topic ${index + 1}`;
+            downloadBtn.download = tv.video_filename;
+            downloadBtn.innerHTML = `<i class="fas fa-download"></i> ${label}`;
             downloadButtons.appendChild(downloadBtn);
         }
     });
@@ -492,24 +560,21 @@ function playTopic(topicIndex) {
     currentTopicIndex = topicIndex;
     
     // Check if video exists for this topic
-    if (!window.currentVideoData || !window.currentVideoData.summary_videos || !window.currentVideoData.summary_videos[topicIndex]) {
+    if (!window.currentVideoData || !window.currentVideoData.topic_videos || !window.currentVideoData.topic_videos[topicIndex] || !window.currentVideoData.topic_videos[topicIndex].video_filename) {
         showError('Video for this topic is not available.');
         return;
     }
     
     // Update video player with organized path
-    const videoPath = `/processed/${window.currentVideoData.summary_videos[topicIndex]}`;
+    const tv = window.currentVideoData.topic_videos[topicIndex];
+    const videoPath = `/processed/${tv.video_filename}`;
     videoPlayer.src = videoPath;
     
     // Update video info with topic details
-    const topicData = window.currentVideoData.clusters?.[topicIndex];
-    if (topicData) {
-        videoTitle.textContent = `Topic ${topicIndex + 1}: ${topicData.keywords?.slice(0, 3).join(', ') || 'Summary'}`;
-        videoDescription.textContent = topicData.summary || 'Click play to start watching the summary video.';
-    } else {
-        videoTitle.textContent = `Topic ${topicIndex + 1} Summary`;
-        videoDescription.textContent = 'Click play to start watching the summary video.';
-    }
+    const titleKeywords = Array.isArray(tv.keywords) ? tv.keywords.slice(0, 3).join(', ') : '';
+    const namePart = tv.name ? `: ${tv.name}` : (titleKeywords ? `: ${titleKeywords}` : ' Summary');
+    videoTitle.textContent = `Topic ${topicIndex + 1}${namePart}`;
+    videoDescription.textContent = tv.summary || 'Click play to start watching the summary video.';
     
     // Show video player
     videoPlayerContainer.style.display = 'block';
@@ -519,15 +584,16 @@ function playTopic(topicIndex) {
 }
 
 function downloadTopic(topicIndex) {
-    if (!window.currentVideoData || !window.currentVideoData.summary_videos || !window.currentVideoData.summary_videos[topicIndex]) {
+    if (!window.currentVideoData || !window.currentVideoData.topic_videos || !window.currentVideoData.topic_videos[topicIndex] || !window.currentVideoData.topic_videos[topicIndex].video_filename) {
         showError('Video for this topic is not available for download.');
         return;
     }
     
-    const videoPath = `/processed/${window.currentVideoData.summary_videos[topicIndex]}`;
+    const tv = window.currentVideoData.topic_videos[topicIndex];
+    const videoPath = `/processed/${tv.video_filename}`;
     const link = document.createElement('a');
     link.href = videoPath;
-    link.download = `topic_${topicIndex + 1}_summary.mp4`;
+    link.download = tv.video_filename || `topic_${topicIndex + 1}_summary.mp4`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -557,15 +623,37 @@ function hideMessages() {
     successMessage.style.display = 'none';
 }
 
+// Path utility: get basename from absolute or relative path (handles Windows and POSIX)
+function getBasenameFromPath(p) {
+    try {
+        if (!p || typeof p !== 'string') return '';
+        const parts = p.split(/[\\/]+/);
+        return parts[parts.length - 1] || '';
+    } catch (_) {
+        return '';
+    }
+}
+
 // Reset functionality
 function resetForm() {
     videoForm.reset();
+    const maxMB = Math.floor(getMaxFileSizeBytes() / (1024 * 1024));
     document.getElementById('fileUploadArea').innerHTML = `
         <div class="upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
         <div class="upload-text">Click to upload or drag & drop</div>
-        <div class="upload-hint">MP4, AVI, MOV, MKV, WEBM (Max 40MB)</div>
+        <div class="upload-hint">MP4, AVI, MOV, MKV, WEBM (Max ${maxMB}MB)</div>
     `;
     showUploadSection();
+}
+
+// Helper to read max file size (bytes) from backend-provided data attribute, with 100MB fallback
+function getMaxFileSizeBytes() {
+    const el = document.getElementById('app-config');
+    if (el && el.dataset && el.dataset.maxFileSize) {
+        const n = parseInt(el.dataset.maxFileSize, 10);
+        if (!isNaN(n) && n > 0) return n;
+    }
+    return 100 * 1024 * 1024;
 }
 
 // Add reset button functionality

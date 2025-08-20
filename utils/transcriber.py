@@ -128,17 +128,21 @@ def extract_audio(
         ]
         
         result = subprocess.run(
-            cmd, 
-            check=True, 
-            stdout=subprocess.PIPE, 
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            timeout=600  # 10 minutes safety timeout
         )
         logger.debug(f"FFmpeg audio extraction output: {result.stdout}")
         return True
         
     except subprocess.CalledProcessError as e:
         logger.error(f"Error extracting audio: {e.stderr}")
+        return False
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"FFmpeg audio extraction timed out: {str(e)}")
         return False
     except Exception as e:
         logger.error(f"Unexpected error in extract_audio: {str(e)}", exc_info=True)
@@ -227,3 +231,4 @@ def transcribe_video(
                 os.remove(audio_path)
             except Exception as e:
                 logger.warning(f"Failed to remove temporary audio file: {e}")
+              

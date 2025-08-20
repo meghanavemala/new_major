@@ -4,21 +4,52 @@ import uuid
 from urllib.parse import urlparse
 import yt_dlp
 import subprocess
+from werkzeug.utils import secure_filename
+
+
+def _get_max_upload_bytes(default: int = 100 * 1024 * 1024) -> int:
+    """Best-effort retrieval of max upload size in bytes.
+    Priority: Flask current_app.config[MAX_CONTENT_LENGTH] > env var > default.
+    """
+    try:
+        # Avoid hard dependency if outside Flask context
+        from flask import current_app  # type: ignore
+
+        try:
+            cfg_val = current_app.config.get("MAX_CONTENT_LENGTH")  # type: ignore[attr-defined]
+            if cfg_val:
+                return int(cfg_val)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    env_val = os.environ.get("MAX_CONTENT_LENGTH")
+    if env_val:
+        try:
+            return int(env_val)
+        except Exception:
+            pass
+    return default
 
 
 def is_youtube_url(url: str) -> bool:
     """
-    Check if the given string is a valid YouTube URL.
+    Permissive YouTube URL check. We rely on yt-dlp for actual parsing.
+    Accepts any subdomain of youtube.com, youtu.be, or youtube-nocookie.com.
     """
-    youtube_regex = (
-        r'(https?://)?(www\.)?'
-        r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        r'(watch\?v=|embed/|v/|.+/)?([\w-]{11})(?:\?[\w-]*=[\w-]*(?:&[\w-]*=[\w-]*)*)?$'
-    )
-    youtube_regex_match = re.match(youtube_regex, url)
-    return youtube_regex_match is not None
+    try:
+        parsed = urlparse(url)
+        host = (parsed.netloc or '').lower()
+        return (
+            'youtube.com' in host
+            or 'youtu.be' in host
+            or 'youtube-nocookie.com' in host
+        )
+    except Exception:
+        return False
 
-
+    
 def handle_video_upload_or_download(request, upload_dir):
     """Handle video upload or YouTube download with proper error handling."""
     import logging
@@ -45,23 +76,42 @@ def handle_video_upload_or_download(request, upload_dir):
 
             logger.info(f"File object valid: {f.filename}, content_type: {getattr(f, 'content_type', 'unknown')}")
 
-            # Get file size
-            file_size = getattr(f, 'content_length', 0)
-            if file_size > 100 * 1024 * 1024:
-                raise ValueError(f"File too large: {file_size / (1024*1024):.1f}MB (max 100MB)")
+            # Determine max allowed size from Flask config/env, fallback to 100MB
+            max_bytes = _get_max_upload_bytes()
+            max_mb = max_bytes / (1024 * 1024)
 
-            path = os.path.join(upload_dir, f"{video_id}_{f.filename}")
+            # Pre-check using provided content_length if available
+            file_size = getattr(f, 'content_length', None)
+            if file_size is not None and int(file_size) > max_bytes:
+                raise ValueError(f"File too large: {int(file_size) / (1024*1024):.1f}MB (max {max_mb:.0f}MB)")
+
+            safe_name = secure_filename(f.filename)
+            path = os.path.join(upload_dir, f"{video_id}_{safe_name}")
+
+            # Stream to disk with enforced limit
+            written = 0
             with open(path, 'wb') as out_file:
                 while True:
                     chunk = f.read(8192)
                     if not chunk:
                         break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        out_file.close()
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                        raise ValueError(f"File too large: {(written)/(1024*1024):.1f}MB (max {max_mb:.0f}MB)")
                     out_file.write(chunk)
 
             actual_file_size = os.path.getsize(path)
-            if actual_file_size > 100 * 1024 * 1024:
-                os.remove(path)
-                raise ValueError(f"File too large: {actual_file_size / (1024*1024):.1f}MB (max 100MB)")
+            if actual_file_size > max_bytes:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+                raise ValueError(f"File too large: {actual_file_size / (1024*1024):.1f}MB (max {max_mb:.0f}MB)")
 
             # Validate video with OpenCV
             try:
@@ -91,19 +141,22 @@ def handle_video_upload_or_download(request, upload_dir):
                 ydl.download([yt_url])
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
-            result = subprocess.run([
-                "ffmpeg", "-i", temp_file,
-                "-vcodec", "libx264", "-crf", "28",
-                "-preset", "fast",
-                "-acodec", "aac", "-b:a", "96k",
-                compressed_path
-            ], capture_output=True, text=True)
+            try:
+                result = subprocess.run([
+                    "ffmpeg", "-i", temp_file,
+                    "-vcodec", "libx264", "-crf", "28",
+                    "-preset", "fast",
+                    "-acodec", "aac", "-b:a", "96k",
+                    compressed_path
+                ], capture_output=True, text=True, timeout=900)
 
-            if result.returncode != 0:
-                raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
-
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("FFmpeg compression timed out")
+            finally:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
             return compressed_path, video_id
 
@@ -159,19 +212,22 @@ def handle_video_upload_or_download_from_data(video_file_data, yt_url_data, uplo
                 ydl.download([yt_url])
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
-            result = subprocess.run([
-                "ffmpeg", "-i", temp_file,
-                "-vcodec", "libx264", "-crf", "28",
-                "-preset", "fast",
-                "-acodec", "aac", "-b:a", "96k",
-                compressed_path
-            ], capture_output=True, text=True)
+            try:
+                result = subprocess.run([
+                    "ffmpeg", "-i", temp_file,
+                    "-vcodec", "libx264", "-crf", "28",
+                    "-preset", "fast",
+                    "-acodec", "aac", "-b:a", "96k",
+                    compressed_path
+                ], capture_output=True, text=True, timeout=900)
 
-            if result.returncode != 0:
-                raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
-
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("FFmpeg compression timed out")
+            finally:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
             return compressed_path, video_id
 
@@ -204,9 +260,9 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
 
         yt_url = yt_url.strip()
         if not is_youtube_url(yt_url):
-            raise ValueError("Invalid YouTube URL provided")
+            logger.warning("YouTube URL did not match pattern; attempting download via yt-dlp anyway")
 
-        temp_file = f"temp_video_{video_id}.mp4"
+        temp_file = os.path.join(upload_dir, f"temp_video_{video_id}.mp4")
         
         # Progress hook function to update status in real-time
         def progress_hook(d):
@@ -249,19 +305,24 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
             status_callback('downloading', 16, 'Compressing video...')
 
         compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
-        result = subprocess.run([
-            "ffmpeg", "-i", temp_file,
-            "-vcodec", "libx264", "-crf", "28",
-            "-preset", "fast",
-            "-acodec", "aac", "-b:a", "96k",
-            compressed_path
-        ], capture_output=True, text=True)
+        try:
+            result = subprocess.run([
+                "ffmpeg", "-i", temp_file,
+                "-vcodec", "libx264", "-crf", "28",
+                "-preset", "fast",
+                "-acodec", "aac", "-b:a", "96k",
+                compressed_path
+            ], capture_output=True, text=True, timeout=900)
 
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
-
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            if status_callback:
+                status_callback('error', 0, 'Compression timed out')
+            raise
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
 
         # Update status to show compression complete
         if status_callback:

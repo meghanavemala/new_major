@@ -138,7 +138,7 @@
                     <div class="file-upload-area" id="fileUploadArea">
                         <div class="upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
                         <div class="upload-text">Click to upload or drag & drop</div>
-                        <div class="upload-hint">MP4, AVI, MOV, MKV, WEBM (Max 40MB)</div>
+                        <div class="upload-hint">MP4, AVI, MOV, MKV, WEBM (Max {{ (max_file_size // (1024*1024)) }}MB)</div>
                         <input type="file" id="video_file" name="video_file" accept="video/*" style="opacity: 0; position: absolute; pointer-events: none;">
                     </div>
                 </div>
@@ -214,6 +214,22 @@
                 <p class="results-subtitle">Your video has been successfully summarized into topics</p>
             </div>
 
+            <!-- Final Summary Video Section (shown only if available) -->
+            <div class="final-summary-section" id="finalSummarySection" style="display: none; margin-bottom: 20px;">
+                <h3 class="download-title"><i class="fas fa-film"></i> Final Summary Video</h3>
+                <div class="video-player-container" style="margin-top: 10px;">
+                    <video class="video-player" id="finalSummaryPlayer" controls>
+                        <source src="" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="download-buttons" style="margin-top: 10px;">
+                    <a id="finalSummaryDownload" class="btn btn-secondary" href="#" download>
+                        <i class="fas fa-download"></i> Download Final Summary
+                    </a>
+                </div>
+            </div>
+
             <div class="topics-grid" id="topicsGrid">
                 <!-- Topics will be populated here -->
             </div>
@@ -244,6 +260,8 @@
         <div class="success-message" id="successMessage"></div>
     </div>
 
+    <!-- Backend config exposed via data attributes to avoid inline JS templating issues -->
+    <div id="app-config" data-max-file-size="{{ max_file_size }}" style="display:none"></div>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
