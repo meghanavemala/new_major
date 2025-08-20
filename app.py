@@ -64,11 +64,22 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Changed from INFO to WARNING
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(), logging.FileHandler("app.log")],
 )
 logger = logging.getLogger(__name__)
+
+# Reduce logging verbosity for external libraries
+logging.getLogger("moviepy").setLevel(logging.WARNING)
+logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("whisper").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("torch").setLevel(logging.WARNING)
+logging.getLogger("numpy").setLevel(logging.WARNING)
+logging.getLogger("cv2").setLevel(logging.WARNING)
 
 
 # Helper functions for video processing
@@ -320,27 +331,13 @@ def process():
     resolution = request.form.get("resolution", CONFIG["DEFAULT_RESOLUTION"])
     summary_length = request.form.get("summary_length", "medium")
     enable_ocr = request.form.get("enable_ocr", "true").lower() == "true"
+    user_prompt = request.form.get("user_prompt", "").strip()
 
     video_file = request.files.get("video_file")
     yt_url = request.form.get("yt_url", "").strip()
 
-    logger.info(f"Received video_file: {video_file}")
-    logger.info(f"Received yt_url: {yt_url}")
-    logger.info(f"All form fields: {list(request.form.keys())}")
-    logger.info(f"All files: {list(request.files.keys())}")
-    logger.info(f"Request content type: {request.content_type}")
-    logger.info(f"Request content length: {request.content_length}")
-
-    if video_file:
-        logger.info(
-            f"Video file details - filename: {video_file.filename}, content_type: {video_file.content_type}"
-        )
-        if video_file.filename:
-            logger.info(f"Video file has filename: {video_file.filename}")
-        else:
-            logger.info("Video file exists but has no filename")
-    else:
-        logger.info("No video_file in request.files")
+    # Reduced verbose logging for performance
+    logger.info(f"Processing request with video_file: {video_file is not None}, yt_url: {yt_url is not None}")
 
     if not video_file and not yt_url:
         logger.error("Validation failed: No video file or YouTube URL provided")
@@ -406,8 +403,6 @@ def process():
         nonlocal video_id
         try:
             logger.info(f"Starting background processing for video {video_id}")
-            logger.info(f"Video file path available: {video_file_path is not None}")
-            logger.info(f"YouTube URL data available: {yt_url_data is not None}")
             # Will hold all extracted keyframe metadata loaded from JSON
             keyframe_metadata_all: List[Dict[str, Any]] = []
             update_processing_status(video_id, "downloading", 5, "Downloading video...")
@@ -456,13 +451,7 @@ def process():
 
             update_processing_status(video_id, "transcribing", 20, "Transcribing audio...")
             transcription_language = source_language if source_language != "auto" else "english"
-            logger.info(f"Transcription language: {transcription_language}")
-            logger.info(f"Calling transcribe_video function...")
-            logger.info(
-                f"Function signature: transcribe_video({video_path}, {CONFIG['PROCESSED_DIR']}, {video_id}, {transcription_language})"
-            )
-            logger.info(f"transcribe_video function type: {type(transcribe_video)}")
-            logger.info(f"transcribe_video function callable: {callable(transcribe_video)}")
+            logger.info(f"Starting transcription with language: {transcription_language}")
 
             # Start periodic heartbeat to prevent watchdog stalls during long transcription
             transcribe_hb_stop = Event()
@@ -589,7 +578,8 @@ def process():
                 # Removed unsupported parameters: min_segment_duration, max_topics, min_topic_duration, use_visual_context, visual_context
                 topics = analyze_topic_segments(
                     segments=segments,
-                    language=target_language
+                    language=target_language,
+                    user_prompt=user_prompt
                 )
                 if not topics:
                     raise ValueError("No coherent topics could be identified in the content")
@@ -658,6 +648,7 @@ def process():
                         cluster=topic_segments,
                         language=target_language,
                         use_extractive=False,
+                        user_prompt=user_prompt
                     )
                     if not summary or len(summary.strip()) < 10:
                         logger.warning(

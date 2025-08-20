@@ -47,7 +47,7 @@ def get_stopwords(language: str) -> Set[str]:
     if lang == 'te':
         return {
             'అవును', 'కాదు', 'అది', 'ఇది', 'వారు', 'నేను', 'మనం', 'మీరు', 'అతను', 'ఆమె', 'కానీ', 'మరియు', 'లేదా',
-            'అంటే', 'అని', 'అన్ని', 'ఏమిటి', 'ఎవరు', 'ఏ', 'అలా', 'ఎలా', 'ఎక్కడ', 'ఎప్పుడు', 'ఎందుకు', 'ఓహ్', 'అయ్యో'
+            'అంటే', 'అని', 'అన్ని', 'ఏమిటి', 'ఎవరు', 'ఏ', 'అలా', 'ఎలా', 'ఎక్కడ', 'ఎప్పుడు', 'ఎందుకు', 'ఓహ్', 'అయ್యೋ'
         }
     if lang == 'ta':
         return {
@@ -73,7 +73,7 @@ def get_stopwords(language: str) -> Set[str]:
     return set()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Download required NLTK data
@@ -308,7 +308,8 @@ def summarize_cluster(
     cluster: List[Dict[str, Any]], 
     language: str = 'en',
     use_extractive: bool = False,
-    remove_fillers: bool = True
+    remove_fillers: bool = True,
+    user_prompt: str = None
 ) -> str:
     """
     Generate a summary for a cluster of text segments with language-aware preprocessing.
@@ -318,6 +319,7 @@ def summarize_cluster(
         language: Language code ('en', 'hi', 'kn', 'te', 'ta', 'ml', 'mr', 'ur')
         use_extractive: Whether to use extractive summarization (faster but less coherent)
         remove_fillers: Whether to remove filler words and stopwords before summarization
+        user_prompt: Optional user prompt to guide summarization focus
         
     Returns:
         Generated summary text with improved language-specific preprocessing
@@ -330,6 +332,12 @@ def summarize_cluster(
     
     if not cluster_text.strip():
         return "No content to summarize."
+    
+    # If user prompt is provided, enhance the text with prompt context
+    if user_prompt and user_prompt.strip():
+        # Add user prompt as context to guide summarization
+        enhanced_text = f"{cluster_text} [Focus on: {user_prompt}]"
+        cluster_text = enhanced_text
     
     # Normalize language code
     language = language.lower()

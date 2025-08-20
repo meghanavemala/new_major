@@ -8,7 +8,7 @@ from pydub import AudioSegment
 import subprocess
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # All major Indian languages supported by Whisper

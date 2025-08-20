@@ -28,7 +28,7 @@ import yake
 from sentence_transformers import SentenceTransformer
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Download required NLTK data
@@ -375,7 +375,7 @@ def extract_topic_keywords(texts: List[str], num_keywords: int = 5, language: st
         return [word for word, _ in sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:num_keywords]]
 
 
-def generate_topic_name(keywords: List[str], entities: List[str] = None) -> str:
+def generate_topic_name(keywords: List[str], entities: List[str] = None, user_prompt: str = None) -> str:
     """
     Generate a descriptive name for a topic based on keywords and entities.
     Prioritizes named entities and falls back to top keywords if no good entity is found.
@@ -383,6 +383,7 @@ def generate_topic_name(keywords: List[str], entities: List[str] = None) -> str:
     Args:
         keywords: List of keywords for the topic, ordered by importance
         entities: List of named entities (e.g., from spaCy NER)
+        user_prompt: Optional user prompt to guide topic naming
         
     Returns:
         str: A descriptive topic name using entities or keywords
@@ -393,6 +394,19 @@ def generate_topic_name(keywords: List[str], entities: List[str] = None) -> str:
     # Clean and prepare the inputs
     keywords = [k for k in keywords if k] if keywords else []
     entities = [e for e in entities if e] if entities else []
+    
+    # If user prompt is provided, try to incorporate it into the topic name
+    if user_prompt and user_prompt.strip():
+        # Extract key terms from user prompt
+        prompt_words = user_prompt.lower().split()
+        prompt_keywords = [word for word in prompt_words if len(word) > 3 and word not in ['focus', 'highlight', 'emphasize', 'cover', 'main', 'key', 'important', 'specific', 'aspects', 'topics', 'concepts', 'applications', 'examples', 'arguments', 'conclusions', 'insights']]
+        
+        # Look for prompt keywords in the topic keywords
+        for prompt_kw in prompt_keywords[:3]:  # Check top 3 prompt keywords
+            for kw in keywords[:5]:  # Check top 5 topic keywords
+                if prompt_kw in kw.lower() or kw.lower() in prompt_kw:
+                    # Found a match, use this to create a more focused topic name
+                    return f"{kw.title()} ({prompt_kw.title()})"
     
     # 1. First try to find a named entity that overlaps with top keywords
     if entities:
@@ -461,13 +475,14 @@ def generate_topic_name(keywords: List[str], entities: List[str] = None) -> str:
         return f"{significant_keywords[0].title()}, {significant_keywords[1].title()} & {significant_keywords[2].title()}"
 
 
-def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en') -> List[Dict[str, Any]]:
+def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en', user_prompt: str = None) -> List[Dict[str, Any]]:
     """
     Analyze segments to identify distinct topics with meaningful names using multilingual embeddings.
     
     Args:
         segments: List of transcript segments with 'text' and timestamp fields
         language: Language code for text processing
+        user_prompt: Optional user prompt to guide topic clustering and analysis
         
     Returns:
         List of topic dictionaries with name, keywords, start/end times
@@ -477,6 +492,17 @@ def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en')
         
     # Extract text from segments
     texts = [segment['text'] for segment in segments]
+    
+    # If user prompt is provided, enhance the analysis
+    if user_prompt and user_prompt.strip():
+        logger.info(f"Using user prompt to guide topic analysis: {user_prompt[:100]}...")
+        # Add user prompt context to help guide clustering
+        enhanced_texts = []
+        for text in texts:
+            # Combine segment text with user prompt for better context
+            enhanced_text = f"{text} [Context: {user_prompt}]"
+            enhanced_texts.append(enhanced_text)
+        texts = enhanced_texts
     
     # Determine optimal number of clusters
     n_topics = determine_optimal_clusters(
@@ -523,8 +549,8 @@ def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en')
         keywords = extract_topic_keywords(topic_texts, language=language)
         entities = extract_named_entities(topic_texts)
         
-        # Generate topic name
-        topic_name = generate_topic_name(keywords, entities)
+        # Generate topic name with user prompt consideration
+        topic_name = generate_topic_name(keywords, entities, user_prompt)
         
         # Get time range for this topic
         start_time = min(s['start'] for s in topic_segments)

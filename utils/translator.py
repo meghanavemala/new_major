@@ -33,7 +33,7 @@ import pickle
 from pathlib import Path
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Language code mappings - comprehensive support for Indian languages

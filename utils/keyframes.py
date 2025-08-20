@@ -14,7 +14,7 @@ import json
 from collections import Counter
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # OCR Dependencies

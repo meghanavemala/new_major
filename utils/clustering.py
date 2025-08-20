@@ -14,7 +14,7 @@ import re
 from collections import defaultdict
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Download required NLTK data
@@ -117,7 +117,7 @@ class TextPreprocessor:
 def cluster_segments(
     segments: List[Dict[str, Any]],
     n_clusters: int = 5,
-    method: str = 'lda',
+    method: str = 'sbert',
     language: str = 'en',
     min_topic_size: int = 2,
     max_features: int = 5000,
@@ -156,8 +156,25 @@ def cluster_segments(
         # Preprocess texts
         preprocessed_texts = [preprocessor.preprocess(text) for text in texts]
         
+        if method == 'sbert':
+    # --- SBERT METHOD ---
+            logger.info("Using SBERT for topic clustering...")
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+
+            # Use raw preprocessed_texts for embeddings
+            embeddings = model.encode(preprocessed_texts, convert_to_numpy=True, show_progress_bar=True)
+
+            # KMeans clustering (using your existing n_clusters)
+            kmeans = KMeans(
+                n_clusters=n_clusters,
+                random_state=42,
+                n_init=10
+            )
+            topic_assignments = kmeans.fit_predict(embeddings)
+
         # Vectorize texts
-        if method in ['lda', 'nmf']:
+        elif method in ['lda', 'nmf']:
             # For topic modeling, use count vectorizer
             vectorizer = CountVectorizer(
                 max_features=max_features,
