@@ -26,6 +26,13 @@ change_settings({"FFMPEG_BINARY": "ffmpeg"})
 
 # Local imports
 from utils.video_maker import make_summary_video, add_subtitle_to_frame
+from utils.video_utils import (
+    get_video_duration,
+    extract_audio,
+    create_transition_video,
+    capture_thumbnail,
+    get_video_frame,
+)
 from utils.keyframes import (
     extract_keyframes,
     extract_keyframes_for_time_range,
@@ -63,210 +70,45 @@ from flask import (
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
-logging.basicConfig(
-    level=logging.WARNING,  # Changed from INFO to WARNING
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("app.log")],
-)
+from logging_config import configure_logging
+from config import load_config
+
+configure_logging(level=os.environ.get("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(__name__)
 
-# Reduce logging verbosity for external libraries
-logging.getLogger("moviepy").setLevel(logging.WARNING)
-logging.getLogger("PIL").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("whisper").setLevel(logging.WARNING)
-logging.getLogger("transformers").setLevel(logging.WARNING)
-logging.getLogger("torch").setLevel(logging.WARNING)
-logging.getLogger("numpy").setLevel(logging.WARNING)
-logging.getLogger("cv2").setLevel(logging.WARNING)
 
-
-# Helper functions for video processing
-def get_video_duration(video_path: str) -> float:
-    """Get the duration of a video file in seconds."""
-    try:
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
-        clip.close()
-        return duration
-    except Exception as e:
-        logger.error(f"Error getting video duration for {video_path}: {str(e)}")
-        return 0.0
-
-
-def extract_audio(video_path: str, output_path: str) -> bool:
-    """Extract audio from a video file."""
-    try:
-        video = VideoFileClip(video_path)
-        audio = video.audio
-        audio.write_audiofile(output_path, logger=None)
-        video.close()
-        return os.path.exists(output_path)
-    except Exception as e:
-        logger.error(f"Error extracting audio from {video_path}: {str(e)}")
-        return False
-
-
-def create_transition_video(
-    start_frame: np.ndarray,
-    end_frame: np.ndarray,
-    output_path: str,
-    duration: float = 1.5,
-    transition_type: str = "fade",
-    resolution: Tuple[int, int] = (1280, 720),
-) -> bool:
-    """Create a transition video between two frames."""
-    try:
-        # Ensure frames match target resolution
-        start_frame = cv2.resize(start_frame, (resolution[0], resolution[1]))
-        end_frame = cv2.resize(end_frame, (resolution[0], resolution[1]))
-
-        temp_files: List[str] = []
-        fps = 30
-        frame_count = max(1, int(duration * fps))
-
-        for i in range(frame_count):
-            alpha = i / (frame_count - 1) if frame_count > 1 else 1.0
-            if transition_type == "fade":
-                blended = cv2.addWeighted(start_frame, 1 - alpha, end_frame, alpha, 0)
-            elif transition_type == "slide":
-                width = resolution[0]
-                offset = int(alpha * width)
-                blended = np.zeros_like(start_frame)
-                if offset < width:
-                    blended[:, : width - offset] = start_frame[:, offset:]
-                    blended[:, width - offset :] = end_frame[:, :offset]
-                else:
-                    blended[:] = end_frame
-            else:
-                # Default to fade if unknown type
-                blended = cv2.addWeighted(start_frame, 1 - alpha, end_frame, alpha, 0)
-
-            temp_frame_path = os.path.join(
-                os.path.dirname(output_path), f"temp_frame_{i:04d}.jpg"
-            )
-            cv2.imwrite(temp_frame_path, blended)
-            temp_files.append(temp_frame_path)
-
-        if temp_files:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                os.path.join(os.path.dirname(temp_files[0]), "temp_frame_%04d.jpg"),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                output_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error creating transition: {result.stderr}")
-                return False
-
-        # Cleanup temp frames
-        for temp_file in temp_files:
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
-
-        return os.path.exists(output_path)
-    except Exception as e:
-        logger.error(f"Error creating transition video: {str(e)}")
-        return False
-
-
-def capture_thumbnail(video_path: str, output_path: str, time_sec: float = 5.0) -> bool:
-    """Capture a thumbnail from a video at the specified time."""
-    try:
-        video = VideoFileClip(video_path)
-        time_sec = float(min(max(0, time_sec), max(0, video.duration - 0.1)))
-        frame = video.get_frame(time_sec)
-        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(output_path, frame_bgr)
-        video.close()
-        return os.path.exists(output_path)
-    except Exception as e:
-        logger.error(f"Error capturing thumbnail: {str(e)}")
-        return False
-
-
-def get_video_frame(video_path: str, frame_index: int = 0) -> Optional[np.ndarray]:
-    """Get a specific frame from a video."""
-    try:
-        video = cv2.VideoCapture(video_path)
-        total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-        if frame_index < 0:
-            frame_index = max(0, total_frames + frame_index)
-        video.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = video.read()
-        video.release()
-        return frame if ret else None
-    except Exception as e:
-        logger.error(f"Error getting video frame: {str(e)}")
-        return None
-
-
-CONFIG: Dict[str, Any] = {
-    "UPLOAD_DIR": "uploads",
-    "PROCESSED_DIR": "processed",
-    "MAX_CONTENT_LENGTH": 100 * 1024 * 1024,
-    "MAX_VIDEO_DURATION": 40 * 60,
-    "SUPPORTED_EXTENSIONS": {"mp4", "avi", "mov", "mkv", "webm"},
-    "DEFAULT_LANGUAGE": "en",
-    "DEFAULT_VOICE": "en-US-Standard-C",
-    "DEFAULT_RESOLUTION": "480p",
-    "ENABLE_DARK_MODE": True,
-}
+CONFIG: Dict[str, Any] = load_config()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production")
+app.secret_key = CONFIG["SECRET_KEY"]
 app.config["MAX_CONTENT_LENGTH"] = CONFIG["MAX_CONTENT_LENGTH"]
+# Disable all auto-reload and file watching features
+app.config["TEMPLATES_AUTO_RELOAD"] = False
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["EXPLAIN_TEMPLATE_LOADING"] = False
+app.config["TESTING"] = False
+# Additional configurations to prevent any file watching
+app.config["PREFERRED_URL_SCHEME"] = "http"
+app.config["SESSION_COOKIE_SECURE"] = False
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Force disable any file monitoring
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 31536000  # 1 year cache
+app.config["TEMPLATES_AUTO_RELOAD"] = False
+app.config["EXPLAIN_TEMPLATE_LOADING"] = False
 
 for dir_path in [CONFIG["UPLOAD_DIR"], CONFIG["PROCESSED_DIR"]]:
     os.makedirs(dir_path, exist_ok=True)
 
-processing_status: Dict[str, Dict[str, Any]] = {}
+from server.status import init_status, get_status as get_processing_status, update_status as update_processing_status
+from server.watchdog import schedule_timeout, start_periodic_heartbeat, start_stall_watchdog
+
+processing_status: Dict[str, Dict[str, Any]] = init_status()
 
 # Generic stall detection threshold (seconds) for status updates
 STALE_STALL_SECONDS = int(os.environ.get("STALE_STALL_SECONDS", "240"))
 
 
-def get_processing_status(video_id: str) -> Dict[str, Any]:
-    return processing_status.get(
-        video_id,
-        {
-            "status": "not_started",
-            "progress": 0,
-            "message": "Processing not started",
-            "error": None,
-        },
-    )
-
-
-def update_processing_status(
-    video_id: str, status: str, progress: int, message: str, error: Optional[str] = None
-) -> None:
-    if video_id not in processing_status:
-        processing_status[video_id] = {}
-    processing_status[video_id].update(
-        {
-            "status": status,
-            "progress": progress,
-            "message": message,
-            "error": error,
-            "last_updated": time.time(),
-        }
-    )
+## moved to server/status.py helpers
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -327,7 +169,11 @@ def index():
 def process():
     source_language = request.form.get("source_language", "auto")
     target_language = request.form.get("target_language", "english")
-    voice = request.form.get("voice", CONFIG["DEFAULT_VOICE"])
+    voice = (request.form.get("voice", CONFIG["DEFAULT_VOICE"]) or "").strip()
+    tts_provider = (request.form.get("tts_provider", os.environ.get("TTS_PROVIDER", "eleven")) or "").strip().lower()
+    edge_rate = request.form.get("edge_rate", os.environ.get("TTS_RATE", "+0%"))
+    edge_pitch = request.form.get("edge_pitch", os.environ.get("TTS_PITCH", "+0Hz"))
+    eleven_voice_id = (request.form.get("eleven_voice_id", os.environ.get("ELEVENLABS_VOICE_ID", "")) or "").strip()
     resolution = request.form.get("resolution", CONFIG["DEFAULT_RESOLUTION"])
     summary_length = request.form.get("summary_length", "medium")
     enable_ocr = request.form.get("enable_ocr", "true").lower() == "true"
@@ -352,7 +198,7 @@ def process():
         return jsonify({"error": f"Unsupported target language: {target_language}"}), 400
 
     video_id = str(int(time.time()))
-    update_processing_status(video_id, "initializing", 0, "Initializing processing...")
+    update_processing_status(processing_status, video_id, "initializing", 0, "Initializing processing...")
 
     video_file_path: Optional[str] = None
     yt_url_data: Optional[str] = None
@@ -405,14 +251,14 @@ def process():
             logger.info(f"Starting background processing for video {video_id}")
             # Will hold all extracted keyframe metadata loaded from JSON
             keyframe_metadata_all: List[Dict[str, Any]] = []
-            update_processing_status(video_id, "downloading", 5, "Downloading video...")
+            update_processing_status(processing_status, video_id, "downloading", 5, "Downloading video...")
             try:
                 if video_file_path:
                     logger.info(f"Using already saved file: {video_file_path}")
                     video_path = video_file_path
                 elif yt_url_data:
                     def update_download_status(status, progress, message):
-                        update_processing_status(video_id, status, progress, message)
+                        update_processing_status(processing_status, video_id, status, progress, message)
 
                     video_path, downloaded_video_id = handle_youtube_download(
                         yt_url_data,
@@ -432,9 +278,7 @@ def process():
                 logger.error(f"Exception type: {type(e)}")
                 logger.error(f"Exception details: {e}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                update_processing_status(
-                    video_id, "error", 0, "Failed to download/process video", str(e)
-                )
+                update_processing_status(processing_status, video_id, "error", 0, "Failed to download/process video", str(e))
                 return
 
             logger.info(f"Moving to transcription stage with video_path: {video_path}")
@@ -449,24 +293,15 @@ def process():
             except Exception as e:
                 logger.error(f"FFmpeg test failed: {e}")
 
-            update_processing_status(video_id, "transcribing", 20, "Transcribing audio...")
+            update_processing_status(processing_status, video_id, "transcribing", 20, "Transcribing audio...")
             transcription_language = source_language if source_language != "auto" else "english"
             logger.info(f"Starting transcription with language: {transcription_language}")
 
             # Start periodic heartbeat to prevent watchdog stalls during long transcription
-            transcribe_hb_stop = Event()
-            def _transcribe_heartbeat():
-                try:
-                    while not transcribe_hb_stop.is_set():
-                        # Keep the same progress and message; this refreshes last_updated
-                        update_processing_status(video_id, "transcribing", 20, "Transcribing audio...")
-                        # Wait with wake-up capability
-                        transcribe_hb_stop.wait(30)
-                except Exception as hb_err:
-                    logger.warning(f"Transcription heartbeat encountered an error: {hb_err}")
-
-            transcribe_hb_thread = Thread(target=_transcribe_heartbeat, daemon=True)
-            transcribe_hb_thread.start()
+            transcribe_hb_stop = start_periodic_heartbeat(
+                interval_seconds=30,
+                update_fn=lambda: update_processing_status(processing_status, video_id, "transcribing", 20, "Transcribing audio...")
+            )
 
             try:
                 transcript_path, segments = transcribe_video(
@@ -486,7 +321,6 @@ def process():
                 # Stop heartbeat thread
                 try:
                     transcribe_hb_stop.set()
-                    transcribe_hb_thread.join(timeout=1)
                 except Exception:
                     pass
 
@@ -502,14 +336,12 @@ def process():
                     logger.info(f"Auto-detected language: {detected_language}")
 
             if detected_language != target_language:
-                update_processing_status(video_id, "translating", 35, "Translating content...")
+                update_processing_status(processing_status, video_id, "translating", 35, "Translating content...")
                 segments = translate_segments(segments, detected_language, target_language)
                 logger.info(f"Translated from {detected_language} to {target_language}")
 
             try:
-                update_processing_status(
-                    video_id, "extracting", 40, "Extracting key frames and analyzing visual content..."
-                )
+                update_processing_status(processing_status, video_id, "extracting", 40, "Extracting key frames and analyzing visual content...")
 
                 ocr_languages = list(set([detected_language, target_language, "en"]))
                 logger.info(f"Starting keyframe extraction with OCR languages: {ocr_languages}")
@@ -554,19 +386,11 @@ def process():
             except Exception as e:
                 logger.error(f"Keyframe extraction failed: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
-                update_processing_status(
-                    video_id,
-                    "error",
-                    0,
-                    "Failed to extract keyframes from video",
-                    str(e),
-                )
+                update_processing_status(processing_status, video_id, "error", 0, "Failed to extract keyframes from video", str(e))
                 return
 
             try:
-                update_processing_status(
-                    video_id, "analyzing", 55, "Analyzing content for coherent topics..."
-                )
+                update_processing_status(processing_status, video_id, "analyzing", 55, "Analyzing content for coherent topics...")
                 if enable_ocr and ocr_summary.get("high_confidence_text"):
                     ocr_context = ocr_summary["high_confidence_text"]
                     if ocr_context.strip() and segments:
@@ -587,13 +411,7 @@ def process():
             except Exception as e:
                 logger.error(f"Topic analysis failed: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
-                update_processing_status(
-                    video_id,
-                    "error",
-                    0,
-                    "Failed to analyze video content for topics",
-                    str(e),
-                )
+                update_processing_status(processing_status, video_id, "error", 0, "Failed to analyze video content for topics", str(e))
                 return
 
             logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")
@@ -636,12 +454,7 @@ def process():
                         ]
 
                     progress = 60 + (25 * topic_idx // max(1, len(topics)))
-                    update_processing_status(
-                        video_id,
-                        "summarizing",
-                        progress,
-                        f"Processing topic {topic_idx + 1}/{len(topics)}: {topic_name}...",
-                    )
+                    update_processing_status(processing_status, video_id, "summarizing", progress, f"Processing topic {topic_idx + 1}/{len(topics)}: {topic_name}...")
 
                     logger.info(f"Generating summary for topic {topic_id}: {topic_name}")
                     summary = summarize_cluster(
@@ -668,10 +481,14 @@ def process():
                             text=summary,
                             output_dir=CONFIG["PROCESSED_DIR"],
                             video_id=video_id,
-                            cluster_id=topic_id,
+                            cluster_id=int(topic_id) if isinstance(topic_id, (int, str)) and str(topic_id).isdigit() else topic_idx,
                             voice=voice,
                             language=target_language,
                             slow=False,
+                            provider=tts_provider,
+                            rate=edge_rate,
+                            pitch=edge_pitch,
+                            eleven_voice_id=eleven_voice_id,
                         )
                         if not audio_path or not os.path.exists(audio_path):
                             raise FileNotFoundError("TTS file not generated")
@@ -705,19 +522,12 @@ def process():
             except Exception as e:
                 logger.error(f"Topic processing failed: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
-                update_processing_status(
-                    video_id, "error", 0, "Failed to process video topics", str(e)
-                )
+                update_processing_status(processing_status, video_id, "error", 0, "Failed to process video topics", str(e))
                 return
 
             # Generate per-topic summary videos using keyframes and TTS audio
             try:
-                update_processing_status(
-                    video_id,
-                    "rendering",
-                    75,
-                    "Generating per-topic summary videos...",
-                )
+                update_processing_status(processing_status, video_id, "rendering", 75, "Generating per-topic summary videos...")
 
                 # Resolve output resolution tuple
                 out_resolution = SUPPORTED_RESOLUTIONS.get(
@@ -790,7 +600,7 @@ def process():
                         log_level="INFO",
                     )
 
-                    if topic_video_path and os.path.exists(topic_video_path):
+                    if isinstance(topic_video_path, str) and os.path.exists(topic_video_path):
                         topic_videos.append(
                             {
                                 "topic_id": tmeta.get("id"),
@@ -809,12 +619,7 @@ def process():
 
                     # Update progress within rendering phase
                     render_progress = 75 + int(20 * (idx + 1) / total_topics)
-                    update_processing_status(
-                        video_id,
-                        "rendering",
-                        min(95, render_progress),
-                        f"Generated {idx + 1}/{total_topics} topic videos",
-                    )
+                    update_processing_status(processing_status, video_id, "rendering", min(95, render_progress), f"Generated {idx + 1}/{total_topics} topic videos")
 
                 # Optionally concatenate topic videos into a final summary
                 final_summary_video = None
@@ -860,79 +665,36 @@ def process():
                     "message": result_message,
                 }
                 processing_status[video_id].update(result)
-                update_processing_status(video_id, "completed", 100, result_message, None)
+                update_processing_status(processing_status, video_id, "completed", 100, result_message, None)
 
             except Exception as e:
                 logger.error(f"Video rendering failed: {str(e)}\n{traceback.format_exc()}")
-                update_processing_status(
-                    video_id, "error", 0, "Failed during summary video generation", str(e)
-                )
+                update_processing_status(processing_status, video_id, "error", 0, "Failed during summary video generation", str(e))
                 return
 
 
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}\n{traceback.format_exc()}")
-            update_processing_status(
-                video_id, "error", 0, "An error occurred during processing", str(e)
-            )
+            update_processing_status(processing_status, video_id, "error", 0, "An error occurred during processing", str(e))
 
     # Thread and Timer already imported at module level
 
     def timeout_handler():
         logger.error(f"Processing timeout for video {video_id}")
-        update_processing_status(
-            video_id,
-            "error",
-            0,
-            "Processing timeout - taking too long",
-            "Processing exceeded maximum time limit",
-        )
+        update_processing_status(processing_status, video_id, "error", 0, "Processing timeout - taking too long", "Processing exceeded maximum time limit")
 
-    timeout_timer = Timer(30 * 60, timeout_handler)
-    timeout_timer.start()
+    timeout_timer = schedule_timeout(30 * 60, timeout_handler)
 
     def watchdog_check():
-        current_status = get_processing_status(video_id)
+        current_status = get_processing_status(processing_status, video_id)
         if current_status.get("status") == "downloading" and current_status.get("progress") == 5:
             logger.error(f"Processing stuck at 5% for video {video_id}, forcing error")
-            update_processing_status(
-                video_id,
-                "error",
-                0,
-                "Processing stuck - forcing error",
-                "Processing got stuck at download stage",
-            )
+            update_processing_status(processing_status, video_id, "error", 0, "Processing stuck - forcing error", "Processing got stuck at download stage")
 
-    watchdog_timer = Timer(5 * 60, watchdog_check)
-    watchdog_timer.start()
+    Timer(5 * 60, watchdog_check).start()
 
     # Heartbeat watchdog: if last_updated hasn't changed for STALE_STALL_SECONDS, fail fast
-    def heartbeat_watchdog(prev_ts: Optional[float] = None):
-        try:
-            st = get_processing_status(video_id)
-            status_val = st.get("status")
-            last_ts = st.get("last_updated") or 0
-            now = time.time()
-
-            # If no progress heartbeat within threshold, mark as error
-            if status_val not in ("completed", "error") and last_ts and now - last_ts > STALE_STALL_SECONDS:
-                logger.error(
-                    f"Processing stalled for video {video_id}: no heartbeat for {int(now - last_ts)}s"
-                )
-                update_processing_status(
-                    video_id,
-                    "error",
-                    0,
-                    "Processing stalled - no progress for too long",
-                    "Watchdog detected stalled processing",
-                )
-        finally:
-            # Reschedule periodic check (once per minute) only if still running
-            st2 = get_processing_status(video_id)
-            if st2.get("status") not in ("completed", "error"):
-                Timer(60, heartbeat_watchdog).start()
-
-    Timer(60, heartbeat_watchdog).start()
+    start_stall_watchdog(processing_status, video_id, STALE_STALL_SECONDS, update_processing_status)
 
     thread = Thread(target=process_video)
     thread.daemon = True
@@ -950,9 +712,9 @@ def process():
 @app.route("/api/status/<video_id>", methods=["GET"])
 def api_status(video_id: str):
     """Return current processing status for a given video_id."""
-    status = get_processing_status(video_id)
+    status = get_processing_status(processing_status, video_id)
     # Include any extra result fields if present (e.g., summaries, keywords)
-    extra = processing_status.get(video_id, {})
+    extra = processing_status.get(video_id, {}) or {}
     merged = {**status}
     for key in ("summaries", "keywords", "topic_videos", "final_summary_video", "message", "progress", "status", "error", "video_id"):
         if key in extra:
@@ -996,6 +758,8 @@ def api_test_upload():
             ydl_opts = {"quiet": True, "no_warnings": True, "socket_timeout": 10}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(yt_url, download=False)
+                if not isinstance(info, dict):
+                    info = {}
                 title = info.get("title")
                 duration = info.get("duration")
                 yt_url = info.get("webpage_url") or yt_url
@@ -1018,9 +782,40 @@ def api_test_upload():
 
 
 if __name__ == "__main__":
-    # Start the Flask development server
+    # Start the Flask server without any file watching
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
-    logger.info(f"Starting Flask server on http://{host}:{port} (debug={debug})")
-    app.run(host=host, port=port, debug=debug, threaded=True)
+    
+    # Override any environment variables that might enable file watching
+    os.environ["FLASK_DEBUG"] = "0"
+    os.environ["FLASK_ENV"] = "production"
+    os.environ["FLASK_USE_RELOADER"] = "0"
+    
+    logger.info(f"Starting Flask server on http://{host}:{port}")
+    logger.info("Auto-reload COMPLETELY DISABLED - server will NOT restart when files change")
+    logger.info("File watching DISABLED - modify any file without server restart")
+    
+    # Try using Werkzeug directly to avoid Flask's development server file watching
+    try:
+        from werkzeug.serving import run_simple
+        logger.info("Using Werkzeug directly to avoid Flask development server file watching")
+        run_simple(
+            hostname=host,
+            port=port,
+            application=app,
+            use_reloader=False,
+            use_debugger=False,
+            threaded=True
+        )
+    except ImportError:
+        # Fallback to Flask's run with all file watching disabled
+        logger.info("Fallback to Flask run with all file watching disabled")
+        app.run(
+            host=host,
+            port=port,
+            debug=False,
+            use_reloader=False,
+            threaded=True,
+            extra_files=None,
+            load_dotenv=False
+        )

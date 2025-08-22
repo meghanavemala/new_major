@@ -41,7 +41,7 @@ An intelligent video summarization system that automatically processes long vide
 1. **Clone the Repository**
    ```bash
    git clone https://github.com/meghanavemala/major-project
-   cd video-summarizer
+   cd major-project
    ```
 
 2. **Create Virtual Environment**
@@ -97,6 +97,77 @@ An intelligent video summarization system that automatically processes long vide
 
 2. **Access the Application**
    Open your browser and navigate to: `http://localhost:5000`
+
+## 🧱 Project Structure
+
+```
+major-project/
+├─ app.py                      # Flask app entrypoint (uses server/* helpers)
+├─ config.py                   # Centralized runtime configuration (env overrides supported)
+├─ logging_config.py           # Logging setup (quiet/normal/verbose)
+├─ server/
+│  ├─ __init__.py
+│  └─ status.py               # Processing status store + helpers
+├─ utils/                      # Core processing modules
+│  ├─ __init__.py
+│  ├─ downloader.py
+│  ├─ keyframes.py
+│  ├─ summarizer.py
+│  ├─ topic_analyzer.py
+│  ├─ transcriber.py
+│  ├─ translator.py
+│  ├─ tts.py
+│  ├─ utils.py
+│  ├─ video_maker.py
+│  └─ video_utils.py          # Reusable video helpers (duration, frames, transitions)
+├─ templates/
+│  └─ index.html              # Frontend template
+├─ static/                     # Static assets
+│  ├─ script.js
+│  └─ style.css
+├─ uploads/                    # Uploads (gitignored)
+├─ processed/                  # Outputs (gitignored)
+├─ tools/
+│  └─ ffmpeg.zip
+├─ tests/                      # (optional) test suite
+├─ requirements.txt
+└─ README.md
+```
+
+### Notes
+- `app.py` now relies on `config.py` and `logging_config.py` for central configuration and logging.
+- Processing status is managed by `server/status.py` and used across routes.
+- Video helpers live in `utils/video_utils.py` to keep `app.py` lean.
+
+## 🔊 Voice Quality (TTS)
+
+The app now supports multiple TTS providers with realistic voices:
+
+- ElevenLabs (most realistic; requires API key)
+- Microsoft Edge Neural TTS (no key required; very natural)
+- gTTS (fallback)
+
+Configure via environment variables:
+
+```bash
+# Preferred provider: eleven | edge | gtts
+set TTS_PROVIDER=eleven
+
+# ElevenLabs (recommended)
+set ELEVENLABS_API_KEY=your_api_key
+set ELEVENLABS_MODEL=eleven_turbo_v2
+# Optional specific voice id from your ElevenLabs account
+set ELEVENLABS_VOICE_ID=your_voice_id
+
+# Edge Neural tuning (if using provider=edge)
+set TTS_RATE=+0%
+set TTS_PITCH=+0Hz
+```
+
+In requests/UI, set the voice field to a supported voice:
+
+- Edge Neural examples: `en-US-JennyNeural`, `en-US-GuyNeural`, `hi-IN-SwaraNeural`
+- ElevenLabs: use a voice ID from your account or rely on default
 
 ## 📖 How It Works
 

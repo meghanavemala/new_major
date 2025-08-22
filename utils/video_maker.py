@@ -370,7 +370,7 @@ def make_summary_video(
     timestamp_format: str = '%H:%M:%S',
     background_color: Tuple[int, int, int] = (0, 0, 0),  # Black
     log_level: str = 'INFO'
-) -> Dict:
+) -> Optional[str]:
     """
     Create a summary video from keyframes with smooth transitions and audio.
     
@@ -400,7 +400,7 @@ def make_summary_video(
         log_level: Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR')
         
     Returns:
-        Dictionary with metadata about the created video
+        Final video file path if successful, otherwise None
     """
     # Set up logging
     logging.basicConfig(level=getattr(logging, log_level.upper()),

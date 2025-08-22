@@ -106,17 +106,17 @@
                 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="voice"><i class="fas fa-microphone"></i> Voice</label>
-                        <select class="form-control" id="voice" name="voice" required>
-                            <option value="en-US-Standard-A">English - Female</option>
-                            <option value="en-US-Standard-B">English - Male</option>
-                            <option value="hi-IN-Standard-A">Hindi - Female</option>
-                            <option value="hi-IN-Standard-B">Hindi - Male</option>
-                            <option value="bn-IN-Standard-A">Bengali - Female</option>
-                            <option value="bn-IN-Standard-B">Bengali - Male</option>
-                            <option value="te-IN-Standard-A">Telugu - Female</option>
-                            <option value="te-IN-Standard-B">Telugu - Male</option>
+                        <label for="tts_provider"><i class="fas fa-broadcast-tower"></i> TTS Provider</label>
+                        <select class="form-control" id="tts_provider" name="tts_provider" required>
+                            <option value="eleven">ElevenLabs (most realistic)</option>
+                            <option value="edge">Edge Neural</option>
+                            <option value="gtts">gTTS (fallback)</option>
                         </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="voice"><i class="fas fa-microphone"></i> Voice</label>
+                        <input type="text" class="form-control" id="voice" name="voice" placeholder="e.g., en-US-JennyNeural or ElevenLabs Voice ID" value="en-US-JennyNeural">
+                        <small class="form-hint">Use Edge voices (e.g., en-US-JennyNeural) or your ElevenLabs Voice ID</small>
                     </div>
                 <div class="form-group">
                         <label for="resolution"><i class="fas fa-expand"></i> Resolution</label>
@@ -125,6 +125,17 @@
                             <option value="720p">720p</option>
                             <option value="1080p">1080p</option>
                     </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edge_rate"><i class="fas fa-sliders-h"></i> Edge Rate</label>
+                        <input type="text" class="form-control" id="edge_rate" name="edge_rate" placeholder="+0%">
+                    </div>
+                    <div class="form-group">
+                        <label for="edge_pitch"><i class="fas fa-wave-square"></i> Edge Pitch</label>
+                        <input type="text" class="form-control" id="edge_pitch" name="edge_pitch" placeholder="+0Hz">
                     </div>
                 </div>
                 

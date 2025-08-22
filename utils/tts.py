@@ -6,6 +6,21 @@ from typing import Optional, Dict, Tuple
 import tempfile
 import time
 from pathlib import Path
+import asyncio
+
+try:
+    import edge_tts  # Microsoft Edge neural TTS
+    EDGE_TTS_AVAILABLE = True
+except Exception:
+    EDGE_TTS_AVAILABLE = False
+
+try:
+    from elevenlabs import generate as eleven_generate
+    from elevenlabs import save as eleven_save
+    from elevenlabs.client import ElevenLabs
+    ELEVEN_AVAILABLE = True
+except Exception:
+    ELEVEN_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
@@ -40,17 +55,22 @@ LANGUAGE_MAP = {
     'russian': 'ru'
 }
 
-# Supported voices configuration
+# Supported voices configuration (generic; actual provider used is selected at runtime)
 SUPPORTED_VOICES = {
     'en': [
         {'id': 'en-US-Standard-A', 'name': 'English US (Female)'},
         {'id': 'en-US-Standard-B', 'name': 'English US (Male)'},
         {'id': 'en-GB-Standard-A', 'name': 'English UK (Female)'},
-        {'id': 'en-GB-Standard-B', 'name': 'English UK (Male)'}
+        {'id': 'en-GB-Standard-B', 'name': 'English UK (Male)'},
+        # Edge Neural examples
+        {'id': 'en-US-JennyNeural', 'name': 'English US Jenny (Neural)'},
+        {'id': 'en-US-GuyNeural', 'name': 'English US Guy (Neural)'}
     ],
     'hi': [
         {'id': 'hi-IN-Standard-A', 'name': 'Hindi (Female)'},
-        {'id': 'hi-IN-Standard-B', 'name': 'Hindi (Male)'}
+        {'id': 'hi-IN-Standard-B', 'name': 'Hindi (Male)'},
+        {'id': 'hi-IN-SwaraNeural', 'name': 'Hindi Swara (Neural)'},
+        {'id': 'hi-IN-MadhurNeural', 'name': 'Hindi Madhur (Neural)'}
     ],
     'bn': [
         {'id': 'bn-IN-Standard-A', 'name': 'Bengali (Female)'},
@@ -95,19 +115,68 @@ VOICE_SETTINGS = {
     'ru': {'tld': 'ru', 'slow': False, 'lang': 'ru'}
 }
 
+# Minimal mapping to more realistic Edge neural voices when provider is 'edge'
+EDGE_DEFAULT_VOICE_BY_LANG = {
+    'en': 'en-US-JennyNeural',
+    'hi': 'hi-IN-SwaraNeural',
+    'bn': 'bn-IN-TanishaaNeural',
+    'te': 'te-IN-ShrutiNeural',
+    'mr': 'mr-IN-AarohiNeural',
+    'ta': 'ta-IN-PallaviNeural',
+    'gu': 'gu-IN-DhwaniNeural',
+    'ur': 'ur-PK-UzmaNeural',
+    'kn': 'kn-IN-SapnaNeural',
+    'or': 'or-IN-TapasNeural',
+    'ml': 'ml-IN-SobhanaNeural',
+    'pa': 'pa-IN-GaganNeural',
+    'as': 'as-IN-DhwaniNeural',
+    'sa': 'sa-IN-AbhijitNeural',
+}
+
+
+def _normalize_voice_for_provider(voice: str, lang_code: str, provider: str) -> str:
+    """Map generic voice ids to provider-specific ones when possible."""
+    if provider == 'edge':
+        # If user passed an Edge voice, keep it; else pick a default neural for language
+        if voice and 'Neural' in voice:
+            return voice
+        return EDGE_DEFAULT_VOICE_BY_LANG.get(lang_code, EDGE_DEFAULT_VOICE_BY_LANG.get('en', 'en-US-JennyNeural'))
+    return voice or ''
+
+
+async def _edge_tts_speak_to_mp3(text: str, voice: str, out_mp3_path: str, rate: str = '+0%', pitch: str = '+0Hz') -> None:
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
+    await communicate.save(out_mp3_path)
+
+
+def _eleven_tts_to_mp3(text: str, voice: str, out_mp3_path: str, model: str = 'eleven_turbo_v2') -> None:
+    api_key = os.environ.get('ELEVENLABS_API_KEY')
+    if not api_key:
+        raise RuntimeError('ELEVENLABS_API_KEY missing')
+    client = ElevenLabs(api_key=api_key)
+    # If user didn't specify a known eleven voice id, fallback to a default
+    voice_id = voice if voice and len(voice) > 10 else os.environ.get('ELEVENLABS_VOICE_ID', '')
+    audio = client.generate(text=text, voice=voice_id or 'Rachel', model=model)
+    eleven_save(audio, out_mp3_path)
+
 def text_to_speech(
     text: str, 
     output_dir: str, 
     video_id: str, 
     cluster_id: int,
-    voice: str = 'en-US-Standard-C',
+    voice: str = 'en-US-JennyNeural',
     language: str = 'english',
     slow: bool = False,
     bitrate: str = '192k',
     max_retries: int = 3,
-    retry_delay: int = 2
+    retry_delay: int = 2,
+    provider: Optional[str] = None,
+    rate: Optional[str] = None,
+    pitch: Optional[str] = None,
+    eleven_voice_id: Optional[str] = None,
+    eleven_model: Optional[str] = None
 ) -> Optional[str]:
-    """Convert text to speech using gTTS with retry logic and offline fallback.
+    """Convert text to speech using a realistic provider (Edge neural by default) with fallback to gTTS.
     
     Args:
         text: Text to convert to speech
@@ -130,6 +199,10 @@ def text_to_speech(
     
     temp_mp3_path = None
     attempt = 0
+    provider = (provider or os.environ.get('TTS_PROVIDER', 'eleven')).lower()
+    edge_rate = (rate or os.environ.get('TTS_RATE', '+0%'))
+    edge_pitch = (pitch or os.environ.get('TTS_PITCH', '+0Hz'))
+    eleven_model = (eleven_model or os.environ.get('ELEVENLABS_MODEL', 'eleven_turbo_v2'))
     
     while attempt < max_retries:
         try:
@@ -140,28 +213,45 @@ def text_to_speech(
                 language = 'english'
                 
             lang_code = LANGUAGE_MAP[language]
-            voice_settings = VOICE_SETTINGS.get(lang_code, VOICE_SETTINGS['en']).copy()
-            voice_settings['slow'] = slow
-            
-            logger.info(f"Generating speech in {language} (Attempt {attempt + 1}/{max_retries})...")
-            
             # Create output directory if it doesn't exist
             os.makedirs(output_dir, exist_ok=True)
-            
+
             # Generate a temporary file path
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_mp3:
                 temp_mp3_path = temp_mp3.name
-            
-            # Generate speech using gTTS
-            tts = gTTS(
-                text=text,
-                lang=voice_settings['lang'],
-                tld=voice_settings['tld'],
-                slow=voice_settings['slow']
-            )
-            
-            # Save as MP3 first (gTTS works better with MP3)
-            tts.save(temp_mp3_path)
+
+            used_provider = provider
+            # First choice: ElevenLabs, if configured
+            if provider == 'eleven' and ELEVEN_AVAILABLE and os.environ.get('ELEVENLABS_API_KEY'):
+                try:
+                    logger.info("[TTS] Using ElevenLabs for ultra-realistic voice")
+                    _eleven_tts_to_mp3(text, eleven_voice_id or voice, temp_mp3_path, model=eleven_model)
+                except Exception as e11:
+                    logger.warning(f"ElevenLabs TTS failed, falling back to Edge: {e11}")
+                    used_provider = 'edge'
+            # Second choice: Edge neural voices if available
+            if used_provider == 'edge' and EDGE_TTS_AVAILABLE:
+                edge_voice = _normalize_voice_for_provider(voice, lang_code, 'edge')
+                logger.info(f"[TTS] Using Edge neural voice: {edge_voice}")
+                try:
+                    asyncio.run(_edge_tts_speak_to_mp3(text, edge_voice, temp_mp3_path, rate=edge_rate, pitch=edge_pitch))
+                except Exception as edge_err:
+                    logger.warning(f"Edge TTS failed, falling back to gTTS: {edge_err}")
+                    used_provider = 'gtts'
+            else:
+                used_provider = 'gtts'
+
+            if used_provider == 'gtts':
+                voice_settings = VOICE_SETTINGS.get(lang_code, VOICE_SETTINGS['en']).copy()
+                voice_settings['slow'] = slow
+                logger.info(f"[TTS] Using gTTS for language {language}")
+                tts = gTTS(
+                    text=text,
+                    lang=voice_settings['lang'],
+                    tld=voice_settings['tld'],
+                    slow=voice_settings['slow']
+                )
+                tts.save(temp_mp3_path)
             
             # Output file path (WAV format for better compatibility)
             output_file = os.path.join(output_dir, f"{video_id}_summary_{cluster_id}.wav")

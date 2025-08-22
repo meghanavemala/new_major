@@ -44,7 +44,7 @@ if __name__ == "__main__":
         print(f"🌐 Server starting on http://{host}:{port}")
         print("⏱️  Processing will be much faster with reduced logging")
         
-        app.run(host=host, port=port, debug=debug)
+        app.run(host=host, port=port, debug=False, use_reloader=False)
         
     except ImportError as e:
         print(f"❌ Error importing app: {e}")

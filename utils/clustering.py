@@ -12,6 +12,7 @@ from nltk.corpus import stopwords
 import string
 import re
 from collections import defaultdict
+from sentence_transformers import SentenceTransformer
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
@@ -47,17 +48,23 @@ for lang in LANGUAGE_STOPWORDS:
     LANGUAGE_STOPWORDS[lang].update(CUSTOM_STOPWORDS.get(lang, set()))
 
 class TextPreprocessor:
-    """Text preprocessing utilities for clustering."""
+    """Enhanced text preprocessing utilities for clustering with prompt-based optimization."""
     
-    def __init__(self, language: str = 'en'):
+    def __init__(self, language: str = 'en', prompt_context: str = None):
         """Initialize the text preprocessor.
         
         Args:
             language: Language code ('en', 'hi', 'kn')
+            prompt_context: Optional prompt context to guide clustering
         """
         self.language = language
+        self.prompt_context = prompt_context
         self.lemmatizer = WordNetLemmatizer()
         self.stopwords = LANGUAGE_STOPWORDS.get(language, set())
+        
+        # Enhanced stopwords based on prompt context
+        if prompt_context:
+            self._enhance_stopwords_from_prompt()
         
     def clean_text(self, text: str) -> str:
         """Clean and preprocess text."""
@@ -85,6 +92,23 @@ class TextPreprocessor:
         text = ' '.join(text.split())
         
         return text
+    
+    def _enhance_stopwords_from_prompt(self):
+        """Enhance stopwords based on prompt context for better clustering."""
+        if not self.prompt_context:
+            return
+            
+        # Extract key concepts from prompt
+        prompt_tokens = self.tokenize(self.prompt_context.lower())
+        
+        # Add prompt-specific terms to stopwords to avoid over-clustering
+        prompt_keywords = set()
+        for token in prompt_tokens:
+            if len(token) > 3 and token not in self.stopwords:
+                prompt_keywords.add(token)
+        
+        # Add these to stopwords to prevent them from dominating clusters
+        self.stopwords.update(prompt_keywords)
     
     def tokenize(self, text: str) -> List[str]:
         """Tokenize text into words."""
@@ -122,7 +146,8 @@ def cluster_segments(
     min_topic_size: int = 2,
     max_features: int = 5000,
     min_cluster_size: int = 2,
-    similarity_threshold: float = 0.7
+    similarity_threshold: float = 0.7,
+    prompt_context: str = None
 ) -> List[List[Dict[str, Any]]]:
     """Cluster text segments into topics.
     
@@ -150,28 +175,66 @@ def cluster_segments(
         # Extract texts from segments
         texts = [seg.get('text', '') for seg in segments]
         
-        # Initialize preprocessor
-        preprocessor = TextPreprocessor(language)
+        # Initialize preprocessor with prompt context
+        preprocessor = TextPreprocessor(language, prompt_context)
         
         # Preprocess texts
         preprocessed_texts = [preprocessor.preprocess(text) for text in texts]
         
         if method == 'sbert':
-    # --- SBERT METHOD ---
-            logger.info("Using SBERT for topic clustering...")
+            # --- ENHANCED SBERT METHOD ---
+            logger.info("Using Enhanced SBERT for topic clustering...")
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-
+            
+            # Use better model for improved embeddings
+            model = SentenceTransformer('all-mpnet-base-v2')  # Better than MiniLM
+            
             # Use raw preprocessed_texts for embeddings
             embeddings = model.encode(preprocessed_texts, convert_to_numpy=True, show_progress_bar=True)
-
-            # KMeans clustering (using your existing n_clusters)
+            
+            # Enhanced KMeans with better initialization
             kmeans = KMeans(
                 n_clusters=n_clusters,
                 random_state=42,
-                n_init=10
+                n_init=20,  # More initializations for better results
+                max_iter=500,  # More iterations
+                tol=1e-4  # Tighter tolerance
             )
             topic_assignments = kmeans.fit_predict(embeddings)
+            
+        elif method == 'enhanced_sbert':
+            # --- MOST ADVANCED SBERT METHOD ---
+            logger.info("Using Most Advanced SBERT for topic clustering...")
+            from sentence_transformers import SentenceTransformer
+            
+            # Use the best available model
+            model = SentenceTransformer('all-mpnet-base-v2')
+            
+            # Get embeddings
+            embeddings = model.encode(preprocessed_texts, convert_to_numpy=True, show_progress_bar=True)
+            
+            # Use HDBSCAN for better clustering (automatically determines number of clusters)
+            import hdbscan
+            clusterer = hdbscan.HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                min_samples=1,
+                metric='euclidean',
+                cluster_selection_method='eom'
+            )
+            topic_assignments = clusterer.fit_predict(embeddings)
+            
+            # Handle noise points and ensure we have the right number of clusters
+            if -1 in topic_assignments:
+                # Assign noise points to nearest clusters
+                from sklearn.neighbors import NearestNeighbors
+                nn = NearestNeighbors(n_neighbors=1)
+                nn.fit(embeddings[topic_assignments != -1])
+                noise_indices = np.where(topic_assignments == -1)[0]
+                if len(noise_indices) > 0:
+                    noise_embeddings = embeddings[noise_indices]
+                    nearest_clusters = nn.kneighbors(noise_embeddings, return_distance=False)
+                    for i, idx in enumerate(noise_indices):
+                        topic_assignments[idx] = topic_assignments[nearest_clusters[i][0]]
 
         # Vectorize texts
         elif method in ['lda', 'nmf']:
@@ -260,6 +323,99 @@ def cluster_segments(
         # Fallback: return all segments in a single cluster
         logger.warning("Falling back to single cluster")
         return [segments]
+
+def determine_optimal_clusters(
+    segments: List[Dict[str, Any]],
+    language: str = 'en',
+    prompt_context: str = None,
+    max_clusters: int = 10
+) -> int:
+    """Determine optimal number of clusters based on content and prompt context."""
+    if not segments:
+        return 3
+    
+    # Extract texts
+    texts = [seg.get('text', '') for seg in segments]
+    
+    # Initialize preprocessor with prompt context
+    preprocessor = TextPreprocessor(language, prompt_context)
+    preprocessed_texts = [preprocessor.preprocess(text) for text in texts]
+    
+    # Use SBERT for embeddings
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer('all-mpnet-base-v2')
+    embeddings = model.encode(preprocessed_texts, convert_to_numpy=True)
+    
+    # Try different numbers of clusters and evaluate
+    best_score = -1
+    best_n_clusters = 3
+    
+    for n_clusters in range(2, min(max_clusters + 1, len(texts) // 2)):
+        try:
+            # Use KMeans with silhouette score
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(embeddings)
+            
+            # Calculate silhouette score
+            from sklearn.metrics import silhouette_score
+            if len(set(cluster_labels)) > 1:  # Need at least 2 clusters
+                score = silhouette_score(embeddings, cluster_labels)
+                
+                # Bonus for prompt-aligned clustering
+                prompt_bonus = 0
+                if prompt_context:
+                    # Check if clusters align with prompt themes
+                    prompt_bonus = _calculate_prompt_alignment_bonus(
+                        embeddings, cluster_labels, prompt_context, model
+                    )
+                
+                final_score = score + prompt_bonus
+                
+                if final_score > best_score:
+                    best_score = final_score
+                    best_n_clusters = n_clusters
+                    
+        except Exception as e:
+            logger.warning(f"Error evaluating {n_clusters} clusters: {e}")
+            continue
+    
+    logger.info(f"Optimal number of clusters: {best_n_clusters} (score: {best_score:.3f})")
+    return best_n_clusters
+
+def _calculate_prompt_alignment_bonus(
+    embeddings: np.ndarray,
+    cluster_labels: np.ndarray,
+    prompt_context: str,
+    model: SentenceTransformer
+) -> float:
+    """Calculate bonus score for prompt-aligned clustering."""
+    try:
+        # Get prompt embedding
+        prompt_embedding = model.encode([prompt_context], convert_to_numpy=True)[0]
+        
+        # Calculate cluster centroids
+        unique_labels = set(cluster_labels)
+        centroids = []
+        
+        for label in unique_labels:
+            cluster_embeddings = embeddings[cluster_labels == label]
+            centroid = np.mean(cluster_embeddings, axis=0)
+            centroids.append(centroid)
+        
+        # Calculate similarity between prompt and cluster centroids
+        similarities = []
+        for centroid in centroids:
+            similarity = np.dot(prompt_embedding, centroid) / (
+                np.linalg.norm(prompt_embedding) * np.linalg.norm(centroid)
+            )
+            similarities.append(similarity)
+        
+        # Return average similarity as bonus
+        return np.mean(similarities) * 0.1  # Small bonus to avoid overwhelming silhouette score
+        
+    except Exception as e:
+        logger.warning(f"Error calculating prompt alignment bonus: {e}")
+        return 0.0
 
 def extract_keywords(
     texts: List[str],

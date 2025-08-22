@@ -11,7 +11,7 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.metrics import silhouette_score
 import nltk
 from nltk.tokenize import sent_tokenize
@@ -47,6 +47,26 @@ try:
 except (ImportError, OSError):
     logger.warning("spaCy model not available. Some features will be limited.")
     SPACY_AVAILABLE = False
+
+"""
+Performance optimizations
+-------------------------
+1) Reuse a single SentenceTransformer instance across calls (embedding is expensive).
+2) Compute embeddings once and pass them through to clustering and k-selection.
+3) Provide a fast heuristic for selecting number of clusters to avoid silhouette loops.
+4) Use MiniBatchKMeans for faster clustering on larger inputs.
+5) Skip spaCy NER by default in fast mode to avoid heavy startup cost.
+"""
+
+# Cached embedder (initialized on demand)
+_EMBEDDER: Optional[SentenceTransformer] = None
+
+def get_embedder() -> SentenceTransformer:
+    """Return a cached multilingual embedder instance."""
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        _EMBEDDER = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    return _EMBEDDER
 
 # Common conversational fillers to be removed
 EXTENDED_FILLERS = {
@@ -174,8 +194,15 @@ def tokenize_text(text: str, language: str = 'en') -> List[str]:
     return cleaned_tokens
 
 
-def determine_optimal_clusters(texts: List[str], max_clusters: int = 10, min_clusters: int = 2, 
-                            language: str = 'en', use_elbow: bool = False) -> int:
+def determine_optimal_clusters(
+    texts: List[str],
+    max_clusters: int = 10,
+    min_clusters: int = 2,
+    language: str = 'en',
+    use_elbow: bool = False,
+    embeddings: Optional[np.ndarray] = None,
+    strategy: str = 'auto'
+) -> int:
     """
     Determine the optimal number of clusters using silhouette score with multilingual embeddings.
     
@@ -190,15 +217,24 @@ def determine_optimal_clusters(texts: List[str], max_clusters: int = 10, min_clu
         Optimal number of clusters based on the highest silhouette score or elbow method
     """
     if len(texts) < min_clusters:
-        return min(len(texts), 1)
+        return max(1, len(texts))
     
+    # Fast heuristic path: choose k ~ sqrt(N), clamped
+    n_samples = len(texts)
+    if strategy in ('fast', 'heuristic'):
+        if n_samples <= 1:
+            return 1
+        if n_samples == 2:
+            return 2
+        k_guess = int(np.ceil(np.sqrt(n_samples)))
+        return max(min_clusters, min(max_clusters, k_guess))
+
     logger.info("Generating multilingual embeddings for clustering...")
     try:
-        # Initialize the multilingual sentence transformer
-        embedder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        
-        # Generate embeddings for all texts
-        embeddings = embedder.encode(texts, show_progress_bar=True)
+        # Generate embeddings for all texts if not provided
+        if embeddings is None:
+            embedder = get_embedder()
+            embeddings = embedder.encode(texts, show_progress_bar=False)
         
         # Normalize embeddings for better clustering
         from sklearn.preprocessing import StandardScaler
@@ -213,10 +249,16 @@ def determine_optimal_clusters(texts: List[str], max_clusters: int = 10, min_clu
         # Store metrics for analysis
         metrics = []
         
-        for n_clusters in range(min_clusters, max_clusters + 1):
-            if n_clusters >= len(texts):
-                continue
-                
+        # Evaluate a small, targeted set of k values to reduce runtime
+        candidate_ks: List[int] = []
+        # Always consider small ks
+        candidate_ks.extend([2, 3, 4, 5])
+        # Add heuristic-based k
+        candidate_ks.append(int(np.ceil(np.sqrt(n_samples))))
+        # Unique, in-range, sorted
+        candidate_ks = sorted({k for k in candidate_ks if min_clusters <= k <= min(max_clusters, n_samples - 1)})
+
+        for n_clusters in candidate_ks:
             try:
                 kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                 labels = kmeans.fit_predict(embeddings_normalized)
@@ -276,10 +318,12 @@ def determine_optimal_clusters(texts: List[str], max_clusters: int = 10, min_clu
         best_score = -1
         best_n_clusters = min_clusters
         
-        for n_clusters in range(min_clusters, max_clusters + 1):
-            if n_clusters >= len(texts):
-                continue
-                
+        candidate_ks: List[int] = []
+        candidate_ks.extend([2, 3, 4, 5])
+        candidate_ks.append(int(np.ceil(np.sqrt(n_samples))))
+        candidate_ks = sorted({k for k in candidate_ks if min_clusters <= k <= min(max_clusters, n_samples - 1)})
+
+        for n_clusters in candidate_ks:
             try:
                 kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                 labels = kmeans.fit_predict(X)
@@ -475,7 +519,12 @@ def generate_topic_name(keywords: List[str], entities: List[str] = None, user_pr
         return f"{significant_keywords[0].title()}, {significant_keywords[1].title()} & {significant_keywords[2].title()}"
 
 
-def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en', user_prompt: str = None) -> List[Dict[str, Any]]:
+def analyze_topic_segments(
+    segments: List[Dict[str, Any]],
+    language: str = 'en',
+    user_prompt: str = None,
+    fast_mode: bool = True
+) -> List[Dict[str, Any]]:
     """
     Analyze segments to identify distinct topics with meaningful names using multilingual embeddings.
     
@@ -493,42 +542,49 @@ def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en',
     # Extract text from segments
     texts = [segment['text'] for segment in segments]
     
-    # If user prompt is provided, enhance the analysis
+    # If user prompt is provided: in fast mode, avoid polluting all embeddings.
+    # Use prompt later for naming; only augment texts when not in fast mode.
     if user_prompt and user_prompt.strip():
-        logger.info(f"Using user prompt to guide topic analysis: {user_prompt[:100]}...")
-        # Add user prompt context to help guide clustering
-        enhanced_texts = []
-        for text in texts:
-            # Combine segment text with user prompt for better context
-            enhanced_text = f"{text} [Context: {user_prompt}]"
-            enhanced_texts.append(enhanced_text)
-        texts = enhanced_texts
+        logger.info(f"User prompt detected ({'fast' if fast_mode else 'full'} mode).")
+        if not fast_mode:
+            enhanced_texts = []
+            for text in texts:
+                enhanced_text = f"{text} [Context: {user_prompt}]"
+                enhanced_texts.append(enhanced_text)
+            texts = enhanced_texts
     
-    # Determine optimal number of clusters
+    # Generate embeddings once (if we choose embedding-based path)
+    embeddings = None
+    try:
+        embedder = get_embedder()
+        embeddings = embedder.encode(texts, show_progress_bar=False)
+    except Exception as e:
+        logger.error(f"Error generating embeddings, will fall back to TF-IDF later if needed: {e}")
+
+    # Determine optimal number of clusters (fast heuristic by default)
     n_topics = determine_optimal_clusters(
-        texts, 
+        texts,
         max_clusters=min(10, len(texts)),
         min_clusters=2,
-        language=language
+        language=language,
+        embeddings=embeddings,
+        strategy='heuristic' if fast_mode else 'auto'
     )
     
     logger.info(f"Clustering {len(segments)} segments into {n_topics} topics...")
     
     try:
-        # Use multilingual sentence embeddings for clustering
-        embedder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        embeddings = embedder.encode(texts, show_progress_bar=True)
-        
-        # Cluster segments using embeddings
-        kmeans = KMeans(n_clusters=n_topics, random_state=42, n_init=10)
+        if embeddings is None:
+            raise RuntimeError("No embeddings available")
+        # Cluster segments using faster MiniBatchKMeans
+        kmeans = MiniBatchKMeans(n_clusters=n_topics, random_state=42, n_init=10, batch_size=max(32, n_topics * 8))
         cluster_labels = kmeans.fit_predict(embeddings)
-        
     except Exception as e:
         logger.error(f"Error in embedding-based clustering, falling back to TF-IDF: {e}")
         # Fallback to TF-IDF if embedding fails
         vectorizer = TfidfVectorizer(max_features=1000)
         X = vectorizer.fit_transform(texts)
-        kmeans = KMeans(n_clusters=n_topics, random_state=42, n_init=10)
+        kmeans = MiniBatchKMeans(n_clusters=n_topics, random_state=42, n_init=10, batch_size=max(32, n_topics * 8))
         cluster_labels = kmeans.fit_predict(X)
     
     # Assign cluster IDs to segments
@@ -545,9 +601,9 @@ def analyze_topic_segments(segments: List[Dict[str, Any]], language: str = 'en',
         # Get all text for this topic
         topic_texts = [s['text'] for s in topic_segments]
         
-        # Extract keywords and entities
+        # Extract keywords (YAKE or fallback). Skip heavy NER in fast mode.
         keywords = extract_topic_keywords(topic_texts, language=language)
-        entities = extract_named_entities(topic_texts)
+        entities = [] if fast_mode else extract_named_entities(topic_texts)
         
         # Generate topic name with user prompt consideration
         topic_name = generate_topic_name(keywords, entities, user_prompt)
