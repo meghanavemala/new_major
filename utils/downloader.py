@@ -242,6 +242,7 @@ def handle_video_upload_or_download_from_data(video_file_data, yt_url_data, uplo
 def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=None):
     """Handle YouTube download only with real-time progress updates."""
     import logging, traceback
+    import time
     logger = logging.getLogger(__name__)
 
     try:
@@ -262,7 +263,9 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
         if not is_youtube_url(yt_url):
             logger.warning("YouTube URL did not match pattern; attempting download via yt-dlp anyway")
 
-        temp_file = os.path.join(upload_dir, f"temp_video_{video_id}.mp4")
+        # Use a more specific template to avoid conflicts and ensure proper cleanup
+        temp_file_template = os.path.join(upload_dir, f"temp_video_{video_id}.%(ext)s")
+        final_temp_file = os.path.join(upload_dir, f"temp_video_{video_id}.mp4")
         
         # Progress hook function to update status in real-time
         def progress_hook(d):
@@ -288,41 +291,93 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
                 elif d['status'] == 'error':
                     status_callback('error', 0, f'Download failed: {d.get("error", "Unknown error")}')
 
+        # Enhanced yt-dlp options with better error handling
         ydl_opts = {
-            'outtmpl': temp_file,
+            'outtmpl': temp_file_template,
             'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
             'merge_output_format': 'mp4',
             'socket_timeout': 60,
-            'progress_hooks': [progress_hook]
+            'progress_hooks': [progress_hook],
+            'nooverwrites': True,  # Don't overwrite existing files
+            'retries': 3,  # Retry failed downloads
+            'fragment_retries': 3,  # Retry failed fragments
+            'file_access_retries': 3,  # Retry failed file access
+            'concurrent_fragment_downloads': 5,  # Download multiple fragments concurrently
         }
 
         logger.info(f"Starting YouTube download with progress hooks...")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([yt_url])
 
+        # Wait a moment to ensure file operations are complete
+        time.sleep(0.5)
+
+        # Check if the file exists with a different extension and rename if needed
+        if not os.path.exists(final_temp_file):
+            import glob
+            pattern = os.path.join(upload_dir, f"temp_video_{video_id}.*")
+            files = glob.glob(pattern)
+            if files:
+                # Sort by modification time and take the most recent
+                files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                most_recent = files[0]
+                if most_recent != final_temp_file:
+                    # Try to rename, but don't fail if it's already correct
+                    try:
+                        os.rename(most_recent, final_temp_file)
+                    except OSError:
+                        # If rename fails, use the existing file
+                        final_temp_file = most_recent
+
         # Update status to show compression starting
         if status_callback:
             status_callback('downloading', 16, 'Compressing video...')
 
         compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
-        try:
-            result = subprocess.run([
-                "ffmpeg", "-i", temp_file,
-                "-vcodec", "libx264", "-crf", "28",
-                "-preset", "fast",
-                "-acodec", "aac", "-b:a", "96k",
-                compressed_path
-            ], capture_output=True, text=True, timeout=900)
+        
+        # Retry mechanism for file operations
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if os.path.exists(final_temp_file):
+                    result = subprocess.run([
+                        "ffmpeg", "-i", final_temp_file,
+                        "-vcodec", "libx264", "-crf", "28",
+                        "-preset", "fast",
+                        "-acodec", "aac", "-b:a", "96k",
+                        compressed_path
+                    ], capture_output=True, text=True, timeout=900)
 
-            if result.returncode != 0:
-                raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            if status_callback:
-                status_callback('error', 0, 'Compression timed out')
-            raise
-        finally:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+                    if result.returncode != 0:
+                        raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
+                    break  # Success, exit retry loop
+                else:
+                    raise FileNotFoundError(f"Temporary file not found: {final_temp_file}")
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying...")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    # Final attempt failed
+                    if isinstance(e, subprocess.TimeoutExpired):
+                        if status_callback:
+                            status_callback('error', 0, 'Compression timed out')
+                        raise RuntimeError("FFmpeg compression timed out")
+                    else:
+                        raise
+            finally:
+                # Try to clean up temp file with retry mechanism
+                if os.path.exists(final_temp_file):
+                    for cleanup_attempt in range(3):
+                        try:
+                            os.remove(final_temp_file)
+                            break
+                        except OSError as e:
+                            if cleanup_attempt < 2:
+                                logger.warning(f"Failed to remove temp file (attempt {cleanup_attempt + 1}): {e}")
+                                time.sleep(1)
+                            else:
+                                logger.warning(f"Failed to remove temp file after 3 attempts: {e}")
 
         # Update status to show compression complete
         if status_callback:

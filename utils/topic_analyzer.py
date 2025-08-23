@@ -419,6 +419,73 @@ def extract_topic_keywords(texts: List[str], num_keywords: int = 5, language: st
         return [word for word, _ in sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:num_keywords]]
 
 
+def should_force_single_topic(user_prompt: str) -> bool:
+    """
+    Determine if a user prompt indicates that only one topic should be extracted.
+    
+    Args:
+        user_prompt: The user's prompt text
+        
+    Returns:
+        bool: True if the prompt indicates a single topic focus, False otherwise
+    """
+    if not user_prompt or not user_prompt.strip():
+        return False
+    
+    # Convert to lowercase for case-insensitive matching
+    prompt_lower = user_prompt.lower().strip()
+    
+    # Keywords that suggest multiple topics (negations)
+    multi_topic_indicators = [
+        'both', 'and', 'various', 'different', 'multiple', 'several', 'all', 'aspects', 'approaches', 'concepts'
+    ]
+    
+    # Check if any multi-topic indicator is in the prompt
+    for indicator in multi_topic_indicators:
+        if indicator in prompt_lower:
+            return False
+    
+    # Keywords that suggest a single topic focus
+    single_topic_indicators = [
+        # Direct indicators
+        'only', 'just', 'single', 'one', 'main', 'primary', 'core', 'central',
+        
+        # Focus indicators
+        'focus on', 'focus only on', 'concentrate on', 'emphasize', 'highlight',
+        'specifically', 'particularly', 'exclusively', 'solely',
+        
+        # Topic limitation indicators
+        'limit to', 'restrict to', 'stick to', 'confine to',
+        
+        # Question formats that imply single topic
+        'what is', 'what are', 'explain', 'describe', 'tell me about',
+        'how to', 'how do', 'why is', 'why are', 'when is', 'when are'
+    ]
+    
+    # Check if any indicator is in the prompt
+    for indicator in single_topic_indicators:
+        if indicator in prompt_lower:
+            return True
+    
+    # Special patterns for single topic requests
+    special_patterns = [
+        r'^.*only.*$',  # Anything with "only"
+        r'^.*just.*$',   # Anything with "just"
+        r'^.*main.*$',   # Anything with "main"
+        r'^explain.*$',  # Starts with "explain"
+        r'^describe.*$', # Starts with "describe"
+        r'^what.*is.*$', # Question format "what is"
+        r'^how.*to.*$',  # Question format "how to"
+    ]
+    
+    import re
+    for pattern in special_patterns:
+        if re.match(pattern, prompt_lower):
+            return True
+    
+    return False
+
+
 def generate_topic_name(keywords: List[str], entities: List[str] = None, user_prompt: str = None) -> str:
     """
     Generate a descriptive name for a topic based on keywords and entities.
@@ -570,6 +637,11 @@ def analyze_topic_segments(
         embeddings=embeddings,
         strategy='heuristic' if fast_mode else 'auto'
     )
+    
+    # Check if user prompt indicates single topic focus
+    if user_prompt and should_force_single_topic(user_prompt):
+        logger.info("User prompt indicates single topic focus. Forcing single cluster.")
+        n_topics = 1
     
     logger.info(f"Clustering {len(segments)} segments into {n_topics} topics...")
     

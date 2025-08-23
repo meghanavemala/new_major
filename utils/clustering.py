@@ -47,10 +47,76 @@ CUSTOM_STOPWORDS = {
 for lang in LANGUAGE_STOPWORDS:
     LANGUAGE_STOPWORDS[lang].update(CUSTOM_STOPWORDS.get(lang, set()))
 
+def _should_force_single_topic(prompt_context: str) -> bool:
+    """
+    Determine if a prompt context indicates that only one topic should be extracted.
+    
+    Args:
+        prompt_context: The prompt context text
+        
+    Returns:
+        bool: True if the prompt indicates a single topic focus, False otherwise
+    """
+    if not prompt_context or not prompt_context.strip():
+        return False
+    
+    # Convert to lowercase for case-insensitive matching
+    prompt_lower = prompt_context.lower().strip()
+    
+    # Keywords that suggest multiple topics (negations)
+    multi_topic_indicators = [
+        'both', 'and', 'various', 'different', 'multiple', 'several', 'all', 'aspects', 'approaches', 'concepts'
+    ]
+    
+    # Check if any multi-topic indicator is in the prompt
+    for indicator in multi_topic_indicators:
+        if indicator in prompt_lower:
+            return False
+    
+    # Keywords that suggest a single topic focus
+    single_topic_indicators = [
+        # Direct indicators
+        'only', 'just', 'single', 'one', 'main', 'primary', 'core', 'central',
+        
+        # Focus indicators
+        'focus on', 'focus only on', 'concentrate on', 'emphasize', 'highlight',
+        'specifically', 'particularly', 'exclusively', 'solely',
+        
+        # Topic limitation indicators
+        'limit to', 'restrict to', 'stick to', 'confine to',
+        
+        # Question formats that imply single topic
+        'what is', 'what are', 'explain', 'describe', 'tell me about',
+        'how to', 'how do', 'why is', 'why are', 'when is', 'when are'
+    ]
+    
+    # Check if any indicator is in the prompt
+    for indicator in single_topic_indicators:
+        if indicator in prompt_lower:
+            return True
+    
+    # Special patterns for single topic requests
+    special_patterns = [
+        r'^.*only.*$',  # Anything with "only"
+        r'^.*just.*$',   # Anything with "just"
+        r'^.*main.*$',   # Anything with "main"
+        r'^explain.*$',  # Starts with "explain"
+        r'^describe.*$', # Starts with "describe"
+        r'^what.*is.*$', # Question format "what is"
+        r'^how.*to.*$',  # Question format "how to"
+    ]
+    
+    import re
+    for pattern in special_patterns:
+        if re.match(pattern, prompt_lower):
+            return True
+    
+    return False
+
 class TextPreprocessor:
     """Enhanced text preprocessing utilities for clustering with prompt-based optimization."""
     
-    def __init__(self, language: str = 'en', prompt_context: str = None):
+    def __init__(self, language: str = 'en', prompt_context: Optional[str] = None):
         """Initialize the text preprocessor.
         
         Args:
@@ -147,7 +213,7 @@ def cluster_segments(
     max_features: int = 5000,
     min_cluster_size: int = 2,
     similarity_threshold: float = 0.7,
-    prompt_context: str = None
+    prompt_context: Optional[str] = None
 ) -> List[List[Dict[str, Any]]]:
     """Cluster text segments into topics.
     
@@ -327,12 +393,17 @@ def cluster_segments(
 def determine_optimal_clusters(
     segments: List[Dict[str, Any]],
     language: str = 'en',
-    prompt_context: str = None,
+    prompt_context: Optional[str] = None,
     max_clusters: int = 10
 ) -> int:
     """Determine optimal number of clusters based on content and prompt context."""
     if not segments:
         return 3
+    
+    # Check if prompt context indicates single topic focus
+    if prompt_context and _should_force_single_topic(prompt_context):
+        logger.info("Prompt context indicates single topic focus. Forcing single cluster.")
+        return 1
     
     # Extract texts
     texts = [seg.get('text', '') for seg in segments]
@@ -385,11 +456,15 @@ def determine_optimal_clusters(
 def _calculate_prompt_alignment_bonus(
     embeddings: np.ndarray,
     cluster_labels: np.ndarray,
-    prompt_context: str,
+    prompt_context: Optional[str],
     model: SentenceTransformer
 ) -> float:
     """Calculate bonus score for prompt-aligned clustering."""
     try:
+        # Check if prompt_context is None
+        if not prompt_context:
+            return 0.0
+            
         # Get prompt embedding
         prompt_embedding = model.encode([prompt_context], convert_to_numpy=True)[0]
         
@@ -411,7 +486,7 @@ def _calculate_prompt_alignment_bonus(
             similarities.append(similarity)
         
         # Return average similarity as bonus
-        return np.mean(similarities) * 0.1  # Small bonus to avoid overwhelming silhouette score
+        return float(np.mean(similarities) * 0.1)  # Small bonus to avoid overwhelming silhouette score
         
     except Exception as e:
         logger.warning(f"Error calculating prompt alignment bonus: {e}")
@@ -451,7 +526,7 @@ def extract_keywords(
         # Extract top keywords
         keywords = [feature_names[i] for i in top_indices if i < len(feature_names)]
         
-        return keywords
+        return [str(feature_names[i]) for i in top_indices if i < len(feature_names)]
     
     except Exception as e:
         logger.error(f"Error in extract_keywords: {e}", exc_info=True)

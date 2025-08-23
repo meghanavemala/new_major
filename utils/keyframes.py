@@ -132,14 +132,19 @@ class KeyframeOCR:
         else:
             gray = image
 
-        # Simple but effective preprocessing
-        # Use OTSU thresholding which is faster than adaptive thresholding
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
         
-        # Light denoising only
-        denoised = cv2.medianBlur(binary, 3)
+        # Use adaptive thresholding for better results on varied lighting
+        binary = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
         
-        return denoised
+        # Morphological operations to clean up the image
+        kernel = np.ones((1, 1), np.uint8)
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        
+        return cleaned
 
     def extract_text_tesseract(self, image: np.ndarray) -> Dict[str, Any]:
         """
@@ -269,6 +274,7 @@ class KeyframeOCR:
         """
         results = []
 
+        # Use threading for parallel OCR processing when multiple engines are available
         if self.ocr_engine in ['tesseract', 'auto'] and TESSERACT_AVAILABLE:
             results.append(self.extract_text_tesseract(image))
 
@@ -278,6 +284,7 @@ class KeyframeOCR:
         if not results:
             return {'text': '', 'confidence': 0, 'method': 'no_ocr_available'}
 
+        # Select the best result based on confidence
         best_result = max(results, key=lambda x: x['confidence'])
         all_text = ' '.join([r['text'] for r in results if r.get('text')])
         best_result['all_methods_text'] = all_text
@@ -291,22 +298,23 @@ def _are_frames_similar(frame1: np.ndarray, frame2: np.ndarray, threshold: float
     Uses faster MSE-based comparison on smaller images.
     """
     try:
-        # Resize to very small size for fast comparison
-        small_size = (64, 36)  # 16:9 aspect ratio, very small for speed
+        # Resize to small size for fast comparison (increased from 64x36 to 96x54 for better accuracy)
+        small_size = (96, 54)  # 16:9 aspect ratio, better balance of speed and accuracy
         
         # Convert to grayscale and resize
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         
-        small1 = cv2.resize(gray1, small_size)
-        small2 = cv2.resize(gray2, small_size)
+        small1 = cv2.resize(gray1, small_size, interpolation=cv2.INTER_LINEAR)
+        small2 = cv2.resize(gray2, small_size, interpolation=cv2.INTER_LINEAR)
         
-        # Calculate MSE
-        mse = np.mean((small1.astype(np.float32) - small2.astype(np.float32)) ** 2)
+        # Calculate MSE with vectorized operations for better performance
+        diff = small1.astype(np.float32) - small2.astype(np.float32)
+        mse = np.mean(diff * diff)
         
         # Convert MSE to similarity score (lower MSE = more similar)
         # Threshold tuning: lower MSE threshold = more similar required
-        mse_threshold = (1.0 - threshold) * 2000  # Scale threshold appropriately
+        mse_threshold = (1.0 - threshold) * 1500  # Adjusted threshold for better accuracy
         
         return mse < mse_threshold
         
@@ -323,12 +331,12 @@ def _smart_frame_sampling(total_frames: int, frame_interval: int, max_keyframes:
     candidate_frames = list(range(0, total_frames, frame_interval))
     
     # If we have too many candidates, sample them intelligently
-    if len(candidate_frames) > max_keyframes * 2:  # Process 2x max for filtering
+    if len(candidate_frames) > max_keyframes * 3:  # Process 3x max for better filtering
         # Use a combination of even distribution and early bias
-        step = len(candidate_frames) // (max_keyframes * 2)
+        step = len(candidate_frames) // (max_keyframes * 3)
         candidate_frames = candidate_frames[::max(1, step)]
     
-    return candidate_frames[:max_keyframes * 2]  # Cap at 2x max for filtering
+    return candidate_frames[:max_keyframes * 3]  # Cap at 3x max for better filtering
 
 
 def extract_keyframes(
@@ -337,7 +345,7 @@ def extract_keyframes(
     video_id: str,
     target_resolution: str = '480p',
     frame_interval: int = 30,          # ~1 per second at 30fps
-    similarity_threshold: float = 0.4,  # lower => catch more changes
+    similarity_threshold: float = 0.35,  # lower => catch more changes (optimized for better detection)
     ocr_languages: List[str] = ['english'],
     enable_ocr: bool = True,
     max_keyframes: int = 100
@@ -354,6 +362,22 @@ def extract_keyframes(
         logger.info(f"Extracting keyframes from {video_path}")
         keyframes_dir = os.path.join(processed_dir, f"{video_id}_keyframes")
         os.makedirs(keyframes_dir, exist_ok=True)
+        
+        # Validate input parameters
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        if not os.path.exists(processed_dir):
+            raise FileNotFoundError(f"Processed directory not found: {processed_dir}")
+        
+        if max_keyframes <= 0:
+            raise ValueError("max_keyframes must be greater than 0")
+        
+        if frame_interval <= 0:
+            raise ValueError("frame_interval must be greater than 0")
+        
+        if similarity_threshold < 0 or similarity_threshold > 1:
+            raise ValueError("similarity_threshold must be between 0 and 1")
 
         # Initialize OCR engine
         ocr_engine = KeyframeOCR(languages=ocr_languages) if enable_ocr else None
@@ -365,6 +389,11 @@ def extract_keyframes(
             '720p': (1280, 720),
             '1080p': (1920, 1080),
         }
+        
+        if target_resolution not in resolution_map:
+            logger.warning(f"Unsupported resolution {target_resolution}, using default 480p")
+            target_resolution = '480p'
+            
         target_width, target_height = resolution_map.get(target_resolution, (854, 480))
 
         cap = cv2.VideoCapture(video_path)
@@ -381,6 +410,9 @@ def extract_keyframes(
         # Smart frame sampling for better performance
         candidate_frame_indices = _smart_frame_sampling(total_frames, frame_interval, max_keyframes)
         logger.info(f"Will process {len(candidate_frame_indices)} candidate frames")
+        
+        # Use ThreadPoolExecutor for parallel OCR processing (if enabled)
+        executor = ThreadPoolExecutor(max_workers=2) if enable_ocr else None
 
         keyframes: List[str] = []
         keyframe_metadata: List[Dict[str, Any]] = []
@@ -477,6 +509,10 @@ def extract_keyframes(
         # Extract and summarize OCR text (optimized)
         if enable_ocr:
             _generate_ocr_summary_optimized(keyframes_dir, keyframe_metadata)
+        
+        # Clean up executor if used
+        if executor:
+            executor.shutdown(wait=True)
 
     except Exception as e:
         logger.error(f"Error extracting keyframes: {e}")

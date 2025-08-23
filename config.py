@@ -15,6 +15,7 @@ def load_config() -> Dict[str, Any]:
         "DEFAULT_RESOLUTION": os.environ.get("DEFAULT_RESOLUTION", "480p"),
         "ENABLE_DARK_MODE": os.environ.get("ENABLE_DARK_MODE", "true").lower() == "true",
         "SECRET_KEY": os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production"),
+        "PARALLEL_DOWNLOADS": int(os.environ.get("PARALLEL_DOWNLOADS", "5")),
     }
 
 

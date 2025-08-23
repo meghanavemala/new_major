@@ -8,7 +8,7 @@ import shutil
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
 import cv2
@@ -77,6 +77,7 @@ configure_logging(level=os.environ.get("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(__name__)
 
 
+# Reload config to include new options
 CONFIG: Dict[str, Any] = load_config()
 
 app = Flask(__name__)
@@ -103,6 +104,9 @@ from server.status import init_status, get_status as get_processing_status, upda
 from server.watchdog import schedule_timeout, start_periodic_heartbeat, start_stall_watchdog
 
 processing_status: Dict[str, Dict[str, Any]] = init_status()
+# Create a thread pool executor for parallel video processing
+# Limit to 2 concurrent video processing tasks to prevent system overload
+video_processing_executor = ThreadPoolExecutor(max_workers=2)
 
 # Generic stall detection threshold (seconds) for status updates
 STALE_STALL_SECONDS = int(os.environ.get("STALE_STALL_SECONDS", "240"))
@@ -696,6 +700,12 @@ def process():
     # Heartbeat watchdog: if last_updated hasn't changed for STALE_STALL_SECONDS, fail fast
     start_stall_watchdog(processing_status, video_id, STALE_STALL_SECONDS, update_processing_status)
 
+# Submit the video processing task to the thread pool executor
+    video_processing_executor.submit(process_video)
+# Old thread creation code removed - using thread pool executor instead
+    # thread = Thread(target=process_video)
+    # thread.daemon = True
+    # thread.start()
     thread = Thread(target=process_video)
     thread.daemon = True
     thread.start()

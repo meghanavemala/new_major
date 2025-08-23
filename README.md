@@ -248,6 +248,9 @@ ENABLE_OCR=true
 WHISPER_MODEL_SIZE=medium
 SUMMARIZATION_MODEL=facebook/bart-large-cnn
 TRANSLATION_METHOD=google  # google, m2m100, auto
+
+# Download Configuration
+PARALLEL_DOWNLOADS=5  # Number of parallel downloads for YouTube videos
 ```
 
 ### Processing Settings
