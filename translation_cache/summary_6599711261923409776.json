@@ -1,0 +1,1 @@
+{"summary": "It works by using intervals. This starts with the length of the array divided by two. We then compare  the first of each array within the given interval. If the first number is larger than the second,  it swaps. This array then looks like this.", "timestamp": 1756028269.140082}

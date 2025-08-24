@@ -41,8 +41,11 @@ from utils.keyframes import (
 from utils.transcriber import transcribe_video
 from utils.translator import translate_segments
 from utils.topic_analyzer import analyze_topic_segments
-from utils.summarizer import summarize_cluster
+from utils.enhanced_summarizer import EnhancedSummarizer
 from utils.tts import text_to_speech
+
+# Initialize the enhanced summarizer
+enhanced_summarizer = EnhancedSummarizer()
 
 from utils.downloader import is_youtube_url, handle_youtube_download
 from utils.transcriber import SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
@@ -461,11 +464,11 @@ def process():
                     update_processing_status(processing_status, video_id, "summarizing", progress, f"Processing topic {topic_idx + 1}/{len(topics)}: {topic_name}...")
 
                     logger.info(f"Generating summary for topic {topic_id}: {topic_name}")
-                    summary = summarize_cluster(
-                        cluster=topic_segments,
-                        language=target_language,
-                        use_extractive=False,
-                        user_prompt=user_prompt
+                    # Combine all segment texts for summarization
+                    full_text = " ".join([s.get("text", "") for s in topic_segments])
+                    summary = enhanced_summarizer.summarize(
+                        text=full_text,
+                        cache_dir="translation_cache"
                     )
                     if not summary or len(summary.strip()) < 10:
                         logger.warning(
