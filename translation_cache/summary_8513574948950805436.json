@@ -1,0 +1,1 @@
+{"summary": "Timsort divides an array into small sub arrays called runs. These runs are then sorted using  insertion sort. Once all the runs have been sorted, it then starts to use merge sort on the two  smallest arrays. The heap is  consists of three arrays. One sorted, one unsorted and one counting array.", "timestamp": 1756028279.979893}

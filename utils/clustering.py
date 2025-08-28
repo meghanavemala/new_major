@@ -206,12 +206,13 @@ class TextPreprocessor:
 
 def cluster_segments(
     segments: List[Dict[str, Any]],
-    method: str = 'dynamic_sbert',
+    n_clusters: int = 5,
+    method: str = 'sbert',
     language: str = 'en',
     min_topic_size: int = 2,
     max_features: int = 5000,
     min_cluster_size: int = 2,
-    similarity_threshold: float = 0.3,  # Lower threshold for better topic separation
+    similarity_threshold: float = 0.7,
     prompt_context: Optional[str] = None
 ) -> List[List[Dict[str, Any]]]:
     """Cluster text segments into topics.
@@ -246,51 +247,26 @@ def cluster_segments(
         # Preprocess texts
         preprocessed_texts = [preprocessor.preprocess(text) for text in texts]
         
-        if method == 'dynamic_sbert':
-            # --- DYNAMIC SBERT METHOD WITH HDBSCAN ---
-            logger.info("Using Dynamic SBERT with HDBSCAN for automatic topic clustering...")
+        if method == 'sbert':
+            # --- ENHANCED SBERT METHOD ---
+            logger.info("Using Enhanced SBERT for topic clustering...")
             from sentence_transformers import SentenceTransformer
-            import hdbscan
             
             # Use better model for improved embeddings
-            model = SentenceTransformer('all-mpnet-base-v2')
+            model = SentenceTransformer('all-mpnet-base-v2')  # Better than MiniLM
             
-            # Generate embeddings
+            # Use raw preprocessed_texts for embeddings
             embeddings = model.encode(preprocessed_texts, convert_to_numpy=True, show_progress_bar=True)
             
-            # Calculate cosine similarity matrix
-            similarity_matrix = cosine_similarity(embeddings)
-            
-            # Initialize HDBSCAN clusterer with optimized parameters
-            clusterer = hdbscan.HDBSCAN(
-                min_cluster_size=min_topic_size,
-                min_samples=1,
-                metric='euclidean',
-                cluster_selection_method='eom',  # Excess of Mass for better cluster selection
-                prediction_data=True
+            # Enhanced KMeans with better initialization
+            kmeans = KMeans(
+                n_clusters=n_clusters,
+                random_state=42,
+                n_init=20,  # More initializations for better results
+                max_iter=500,  # More iterations
+                tol=1e-4  # Tighter tolerance
             )
-            
-            # Fit and predict clusters
-            topic_assignments = clusterer.fit_predict(embeddings)
-            
-            # Handle noise points (-1 labels) by assigning them to nearest clusters
-            if -1 in topic_assignments:
-                from sklearn.neighbors import NearestNeighbors
-                
-                # Find core points (non-noise points)
-                core_mask = topic_assignments != -1
-                if np.any(core_mask):
-                    # Fit nearest neighbors on core points
-                    nn = NearestNeighbors(n_neighbors=1)
-                    nn.fit(embeddings[core_mask])
-                    
-                    # Find nearest core point for each noise point
-                    noise_mask = ~core_mask
-                    _, indices = nn.kneighbors(embeddings[noise_mask])
-                    
-                    # Assign noise points to nearest core point's cluster
-                    noise_assignments = topic_assignments[core_mask][indices.flatten()]
-                    topic_assignments[noise_mask] = noise_assignments
+            topic_assignments = kmeans.fit_predict(embeddings)
             
         elif method == 'enhanced_sbert':
             # --- MOST ADVANCED SBERT METHOD ---

@@ -1,0 +1,1 @@
+{"summary": "MergeSort can be implemented in C++ with only three lines of code. Essentially whether your list is a bit sorted already or completely random, MergeSort can sort it. It can be used to sort lists that are already sorted, so we need only one loop through them all.", "timestamp": 1756028293.966129}
