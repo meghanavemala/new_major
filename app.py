@@ -40,7 +40,7 @@ from utils.keyframes import (
 )
 from utils.transcriber import transcribe_video
 from utils.translator import translate_segments
-from utils.topic_analyzer import analyze_topic_segments
+from utils.topic_analyzer_dynamic import analyze_topic_segments_dynamic
 from utils.enhanced_summarizer import EnhancedSummarizer
 from utils.tts import text_to_speech
 
@@ -407,10 +407,14 @@ def process():
                             segments[seg_idx]["text"] += f" [Visual context: {chunk}]"
                 logger.info(f"Starting topic analysis on {len(segments)} segments...")
                 # Removed unsupported parameters: min_segment_duration, max_topics, min_topic_duration, use_visual_context, visual_context
-                topics = analyze_topic_segments(
+                # Use dynamic topic analysis for better content-based clustering
+                from utils.topic_analyzer_dynamic import analyze_topic_segments_dynamic
+                topics = analyze_topic_segments_dynamic(
                     segments=segments,
                     language=target_language,
-                    user_prompt=user_prompt
+                    user_prompt=user_prompt,
+                    min_topic_size=2,
+                    similarity_threshold=0.3
                 )
                 if not topics:
                     raise ValueError("No coherent topics could be identified in the content")

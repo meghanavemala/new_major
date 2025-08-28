@@ -12,6 +12,7 @@ This module maintains the same API while providing significant performance impro
 import os
 import cv2
 import numpy as np
+import random
 from typing import List, Optional, Dict, Any
 import logging
 import json
@@ -344,11 +345,11 @@ def extract_keyframes(
     processed_dir: str,
     video_id: str,
     target_resolution: str = '480p',
-    frame_interval: int = 30,          # ~1 per second at 30fps
-    similarity_threshold: float = 0.35,  # lower => catch more changes (optimized for better detection)
+    frame_interval: int = 90,          # Sample every 3 seconds at 30fps
+    similarity_threshold: float = 0.35,  # Not used with random sampling
     ocr_languages: List[str] = ['english'],
     enable_ocr: bool = True,
-    max_keyframes: int = 100
+    max_keyframes: int = 5           # Reduced number of keyframes per segment
 ) -> Optional[str]:
     """
     Extract keyframes from video with OCR text analysis - OPTIMIZED VERSION.
@@ -375,9 +376,6 @@ def extract_keyframes(
         
         if frame_interval <= 0:
             raise ValueError("frame_interval must be greater than 0")
-        
-        if similarity_threshold < 0 or similarity_threshold > 1:
-            raise ValueError("similarity_threshold must be between 0 and 1")
 
         # Initialize OCR engine
         ocr_engine = KeyframeOCR(languages=ocr_languages) if enable_ocr else None
@@ -395,6 +393,10 @@ def extract_keyframes(
             target_resolution = '480p'
             
         target_width, target_height = resolution_map.get(target_resolution, (854, 480))
+
+        # Initialize random number generator with video_id to make sampling deterministic
+        import random
+        random.seed(video_id)
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -568,18 +570,18 @@ def extract_keyframes_for_time_range(
     video_path: str, 
     start_time: float, 
     end_time: float, 
-    max_keyframes: int = 30,
-    similarity_threshold: float = 0.4
+    max_keyframes: int = 5,  # Reduced default for faster processing
+    similarity_threshold: float = 0.4   # Not used with random sampling
 ) -> List[Dict[str, Any]]:
     """
-    Extract keyframes from a specific time range in the video - OPTIMIZED VERSION.
+    Extract keyframes from a specific time range in the video - RANDOM SAMPLING VERSION.
     
     Args:
         video_path: Path to the source video file
         start_time: Start time in seconds
         end_time: End time in seconds
         max_keyframes: Maximum number of keyframes to extract
-        similarity_threshold: Minimum similarity (0-1) between consecutive frames
+        similarity_threshold: Not used in random sampling version
         
     Returns:
         List of keyframe metadata dictionaries
@@ -606,18 +608,23 @@ def extract_keyframes_for_time_range(
         if total_frames <= 0:
             logger.warning(f"Invalid time range: {start_time}s to {end_time}s")
             return []
-            
-        # Optimized frame interval calculation
-        frame_interval = max(1, total_frames // min(max_keyframes * 2, total_frames))
         
-        # Initialize variables for frame comparison
-        prev_frame = None
+        # Calculate how many frames to actually sample
+        num_samples = min(max_keyframes, total_frames)
+        if num_samples == 0:
+            return []
+
+        # Generate random frame positions within the range
+        frame_positions = sorted(random.sample(
+            range(start_frame, end_frame + 1), 
+            num_samples
+        ))
         
-        for i in range(0, total_frames, frame_interval):
+        # Extract the selected frames
+        for frame_pos in frame_positions:
             if len(keyframes) >= max_keyframes:
                 break
                 
-            frame_pos = start_frame + i
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
             
@@ -629,11 +636,6 @@ def extract_keyframes_for_time_range(
             
             # Resize for consistency and speed
             frame_resized = cv2.resize(frame, (854, 480))
-            
-            # Only keep frames that are sufficiently different
-            if prev_frame is not None:
-                if _are_frames_similar(frame_resized, prev_frame, similarity_threshold):
-                    continue
             
             # Save the frame
             frame_filename = f"kf_{int(timestamp)}_{len(keyframes):04d}.jpg"
@@ -677,12 +679,12 @@ def get_keyframes_for_topic(
     keyframes_dir: str,
     topic_start: float,
     topic_end: float,
-    target_keyframe_count: int = 10,
-    min_keyframe_count: int = 3,
-    similarity_threshold: float = 0.4
+    target_keyframe_count: int = 5,  # Reduced for faster processing
+    min_keyframe_count: int = 2,     # Reduced minimum
+    similarity_threshold: float = 0.4  # Not used with random sampling
 ) -> List[Dict[str, Any]]:
     """
-    Get keyframes for a specific topic time range - OPTIMIZED VERSION.
+    Get keyframes for a specific topic time range - RANDOM SAMPLING VERSION.
     
     Args:
         video_path: Path to the source video file
@@ -691,7 +693,7 @@ def get_keyframes_for_topic(
         topic_end: End time of the topic in seconds
         target_keyframe_count: Desired number of keyframes
         min_keyframe_count: Minimum number of keyframes to ensure
-        similarity_threshold: Threshold for frame similarity (0-1)
+        similarity_threshold: Not used in random sampling
         
     Returns:
         List of keyframe metadata dictionaries
@@ -734,16 +736,21 @@ def get_keyframes_for_topic(
                 kf['topic_end'] = topic_end
                 kf['is_additional'] = True
             
-            # Combine and sort all keyframes by timestamp
+            # Combine all keyframes and sort by timestamp
             all_keyframes = sorted(
                 topic_keyframes + additional_keyframes,
                 key=lambda x: x.get('timestamp', 0)
             )
             
-            # Optimized similarity filtering
-            filtered_keyframes = _filter_similar_keyframes_optimized(
-                all_keyframes, similarity_threshold, target_keyframe_count
-            )
+            # If we have more frames than needed, randomly sample them
+            if len(all_keyframes) > target_keyframe_count:
+                selected_indices = sorted(random.sample(
+                    range(len(all_keyframes)), 
+                    target_keyframe_count
+                ))
+                filtered_keyframes = [all_keyframes[i] for i in selected_indices]
+            else:
+                filtered_keyframes = all_keyframes
             
             # Ensure we have at least the minimum required keyframes
             if len(filtered_keyframes) < min_keyframe_count and all_keyframes:

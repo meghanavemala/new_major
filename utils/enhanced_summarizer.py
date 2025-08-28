@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Hugging Face Inference API (Free tier)
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-# HuggingFace API token
-HUGGINGFACE_API_TOKEN = "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"  # Replace with your token
+# HuggingFace API token from environment variable
+HUGGINGFACE_API_TOKEN = os.getenv('HUGGINGFACE_TOKEN', '')  # Set this using environment variable
 
 # Fallback model configuration (when API fails or for other languages)
 LOCAL_MODEL_NAME = "sshleifer/distilbart-cnn-12-6"  # Smaller, faster model

@@ -19,6 +19,7 @@ import random
 from typing import Optional, Tuple, Dict, List, Union
 from pathlib import Path
 from dataclasses import dataclass
+from pydub.effects import normalize
 
 # Supported video resolutions (width, height)
 SUPPORTED_RESOLUTIONS = {
@@ -416,7 +417,15 @@ def make_summary_video(
     # Calculate total duration if audio is provided
     audio_duration = 0
     if audio_path and os.path.exists(audio_path):
-        logger.info(f"Sorted {len(keyframes)} keyframes by timestamp")
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio_duration = len(audio) / 1000.0  # Convert to seconds
+            logger.info(f"Audio duration: {audio_duration:.2f} seconds")
+        except Exception as e:
+            logger.error(f"Error reading audio file {audio_path}: {e}")
+            return None
+            
+    logger.info(f"Sorted {len(keyframes)} keyframes by timestamp")
     
     # Read the first image to get dimensions
     first_img = cv2.imread(keyframes[0]['filepath'])
@@ -527,10 +536,27 @@ def make_summary_video(
         try:
             temp_audio = output_path + "_audio.wav"
             audio = AudioSegment.from_file(audio_path)
+            
+            # Ensure audio duration matches video duration
+            video_duration = frames_written / fps
+            audio_duration = len(audio) / 1000.0
+            
+            if audio_duration < video_duration:
+                # Extend audio with silence if needed
+                silence_needed = int((video_duration - audio_duration) * 1000)
+                silence = AudioSegment.silent(duration=silence_needed)
+                audio = audio + silence
+            elif audio_duration > video_duration:
+                # Trim audio if longer than video
+                audio = audio[:int(video_duration * 1000)]
+            
+            # Normalize and export
+            audio = normalize(audio)
             audio.export(temp_audio, format="wav")
             
             if not os.path.exists(temp_audio) or os.path.getsize(temp_audio) < 1000:
                 logger.error(f"Temp audio file missing or too small: {temp_audio}")
+                logger.error(f"Audio path: {audio_path}, Size: {os.path.getsize(temp_audio) if os.path.exists(temp_audio) else 0} bytes")
                 return None
             
             # Use FFmpeg to mux video and audio
@@ -546,14 +572,27 @@ def make_summary_video(
             try:
                 logger.info(f"Running FFmpeg: {' '.join(cmd)}")
                 result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE, text=True, timeout=120)
+                                     stderr=subprocess.PIPE, text=True, timeout=300)  # Increased timeout to 5 minutes
                 logger.debug(f"FFmpeg output: {result.stdout}")
                 
                 if not os.path.exists(final_video) or os.path.getsize(final_video) < 1000:
                     logger.error(f"Output video not created or too small: {final_video}")
+                    logger.error(f"FFmpeg stderr: {result.stderr}")
                     return None
                     
-                logger.info(f"Successfully created summary video: {final_video}")
+                # Verify audio stream exists in output
+                probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 
+                           'stream=codec_type', '-of', 'default=noprint_wrappers=1:nokey=1', final_video]
+                try:
+                    audio_result = subprocess.run(probe_cmd, check=True, capture_output=True, text=True)
+                    if 'audio' not in audio_result.stdout:
+                        logger.error("No audio stream detected in output video")
+                        return None
+                except Exception as e:
+                    logger.error(f"Failed to verify audio stream: {e}")
+                    return None
+                
+                logger.info(f"Successfully created summary video with audio: {final_video}")
                 return final_video
                 
             except subprocess.TimeoutExpired:
