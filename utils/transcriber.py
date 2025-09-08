@@ -1,15 +1,16 @@
 import os
 import json
 import logging
-import whisper
+import subprocess
 import torch
 from typing import Dict, List, Tuple, Optional, Any
-from pydub import AudioSegment
-import subprocess
-import numpy as np
-from faster_whisper import WhisperModel
 import librosa
 import soundfile as sf
+from pydub import AudioSegment
+from faster_whisper import WhisperModel
+from .gpu_config import get_device
+from .config import SUPPORTED_LANGUAGES, get_smart_model_size
+from .audio_utils import extract_audio, enhance_audio_quality
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
@@ -176,7 +177,9 @@ def get_smart_model_size(
     language: str = 'en',
     quality_preference: str = 'balanced'
 ) -> str:
-    """Smart model selection based on video length and quality preference."""
+    """
+    Smart model selection based on video length and quality preference.
+    """
     try:
         # Get video duration using ffprobe (faster than loading video)
         import subprocess
@@ -213,97 +216,200 @@ def get_smart_model_size(
         logger.warning(f"Error in smart model selection: {e}, using default medium model")
         return 'medium'
 
+def _transcribe_with_model(audio_path: str, model, language: str) -> List[Dict]:
+    """Helper function to transcribe audio with a model."""
+    segments_fw, info = model.transcribe(
+        audio_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True
+    )
+    
+    segments = []
+    if segments_fw and len(segments_fw) > 0:
+        for s in segments_fw:
+            segments.append({
+                'start': s.start,
+                'end': s.end,
+                'text': s.text.strip(),
+                'words': getattr(s, 'words', [])
+            })
+        return segments
+    else:
+        raise Exception("No speech segments detected")
+
+def _transcribe_with_whisper(audio_path: str, model_size: str, device: str, lang_code: str) -> List[Dict]:
+    """Transcribe using Faster-Whisper with fallback from GPU to CPU."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return []
+
+    segments = []
+    logger.info(f"Transcribing with {model_size} model on {device}")
+    
+    try:
+        model = WhisperModel(
+            model_size,
+            device=device,
+            compute_type="float16" if device == "cuda" else "int8"
+        )
+        segments_fw, info = model.transcribe(
+            audio_path,
+            language=lang_code,
+            beam_size=5,
+            vad_filter=True
+        )
+        
+        if segments_fw and len(segments_fw) > 0:
+            for s in segments_fw:
+                segments.append({
+                    'start': s.start,
+                    'end': s.end,
+                    'text': s.text.strip(),
+                    'words': getattr(s, 'words', [])
+                })
+            return segments
+    except Exception as e:
+        logger.warning(f"Transcription failed: {e}")
+        return []
+    
+    return segments
+
 def transcribe_video(
-    video_path: str, 
-    processed_dir: str, 
-    video_id: str, 
+    video_path: str,
+    processed_dir: str,
+    video_id: str,
     language: str = 'english',
     model_size: Optional[str] = None,
     quality_preference: str = 'balanced'
 ) -> Tuple[Optional[str], List[Dict]]:
-    """Transcribe video to text using Whisper.
+    """Transcribe video to text using Faster-Whisper.
+    
+    This function takes a video file and transcribes its audio content using
+    Faster-Whisper. It supports both GPU and CPU processing, with automatic
+    fallback to CPU if GPU memory is insufficient.
     
     Args:
-        video_path: Path to input video file
-        processed_dir: Directory to save output files
-        video_id: Unique ID for the video
-        language: Language of the video ('english', 'hindi', or 'kannada')
-        model_size: Override the default model size (tiny, base, small, medium, large)
+        video_path (str): Path to the input video file
+        processed_dir (str): Directory to save processed files
+        video_id (str): Unique identifier for the video
+        language (str, optional): Language of the video. Defaults to 'english'
+        model_size (Optional[str], optional): Size of Whisper model. Defaults to None
+        quality_preference (str, optional): Quality preference. Defaults to 'balanced'
         
     Returns:
-        Tuple containing:
-        - Path to segments JSON file (or None if failed)
-        - List of segment dictionaries
+        Tuple[Optional[str], List[Dict]]: A tuple containing:
+            - str or None: Path to the segments JSON file, or None if transcription failed
+            - List[Dict]: List of transcribed segments, each containing start time,
+                       end time, text, and word-level timing information
     """
+    segments = []
+    audio_path = None
+    seg_path = None
+    
+    # Setup paths and extract audio
     try:
-        # Validate language
-        language = language.lower()
-        if language not in LANGUAGE_MAP:
-            logger.warning(f"Unsupported language: {language}. Defaulting to English.")
-            language = 'english'
-            
-        lang_code = LANGUAGE_MAP[language]
-        
-        # Set model size if not provided - use smart selection
-        if model_size is None:
-            model_size = get_smart_model_size(video_path, lang_code, quality_preference)
-        else:
-            # Use provided model size but log the choice
-            logger.info(f"Using manually specified model size: {model_size}")
-        
-        logger.info(f"Transcribing video in {language} using Whisper {model_size} model...")
-        
-        # Log model selection reasoning
-        logger.info(f"Model selection: {model_size} for {language} language")
-        logger.info(f"Quality preference: {quality_preference}")
-        
-        # Create output directory if it doesn't exist
         os.makedirs(processed_dir, exist_ok=True)
-        
-        # Paths for intermediate and output files
         audio_path = os.path.join(processed_dir, f"{video_id}_audio.wav")
         seg_path = os.path.join(processed_dir, f"{video_id}_segments.json")
         
-        # Extract audio from video
         if not extract_audio(video_path, audio_path):
             logger.error("Failed to extract audio from video")
             return None, []
         
-        # Check if GPU is available
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        logger.info(f"Using device: {device}")
+        # Configure model and device
+        lang_code = SUPPORTED_LANGUAGES.get(language.lower(), language.lower())
+        device = get_device()
+        if not model_size:
+            model_size = get_smart_model_size(video_path, lang_code, quality_preference)
         
-        # Load Whisper model
-        model = whisper.load_model(model_size, device=device)
+        # Check GPU memory and adjust model size if needed
+        if device == 'cuda':
+            total_mem = torch.cuda.get_device_properties(0).total_memory // (1024**2)
+            if total_mem <= 4096:
+                logger.warning("GPU has 4GB or less. Using 'small' model.")
+                model_size = 'small'
+                
+        logger.info(f"Transcribing with {model_size} model on {device}")
         
-        # Transcribe audio
-        result = model.transcribe(
-            audio_path,
-            language=lang_code,
-            verbose=False,
-            fp16=(device == 'cuda')  # Use mixed precision on GPU
-        )
+        try:
+            if device == 'cuda':
+                try:
+                    torch.cuda.empty_cache()
+                    model = WhisperModel(model_size, device='cuda', compute_type="float16")
+                    segments_fw, info = model.transcribe(
+                        audio_path,
+                        language=lang_code,
+                        beam_size=5,
+                        vad_filter=True
+                    )
+                    
+                    if segments_fw:
+                        for s in segments_fw:
+                            segments.append({
+                                'start': s.start,
+                                'end': s.end,
+                                'text': s.text.strip(),
+                                'words': getattr(s, 'words', [])
+                            })
+                        logger.info(f"GPU transcription successful: {len(segments)} segments")
+                except RuntimeError as e:
+                    if 'CUDA out of memory' in str(e):
+                        logger.warning("CUDA OOM error, falling back to CPU")
+                        device = 'cpu'
+                        model_size = 'small'
+                        torch.cuda.empty_cache()
+                    else:
+                        raise
+            
+            # Use CPU if GPU failed or wasn't available
+            if device == 'cpu' or not segments:
+                model = WhisperModel(model_size, device='cpu', compute_type="int8")
+                segments_fw, info = model.transcribe(
+                    audio_path,
+                    language=lang_code,
+                    beam_size=5,
+                    vad_filter=True
+                )
+                
+                if segments_fw:
+                    segments.clear()  # Clear any failed GPU attempt results
+                    for s in segments_fw:
+                        segments.append({
+                            'start': s.start,
+                            'end': s.end,
+                            'text': s.text.strip(),
+                            'words': getattr(s, 'words', [])
+                        })
+                    logger.info(f"CPU transcription successful: {len(segments)} segments")
+            
+        except ImportError as e:
+            logger.error(f"Failed to import Faster-Whisper: {e}")
+            return None, []
         
-        # Get segments
-        segments = result.get('segments', [])
+        # Save results if we got any segments
+        if segments:
+            with open(seg_path, 'w', encoding='utf-8') as f:
+                json.dump(segments, f, indent=2, ensure_ascii=False)
+            return seg_path, segments
         
-        # Save segments to file
-        with open(seg_path, 'w', encoding='utf-8') as f:
-            json.dump(segments, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Transcription complete. Saved to {seg_path}")
-        return seg_path, segments
-        
-    except Exception as e:
-        logger.error(f"Error in transcribe_video: {str(e)}", exc_info=True)
+        logger.error("No speech segments detected")
         return None, []
+            
+    except Exception as e:
+        logger.error(f"Transcription failed: {e}", exc_info=True)
+        return None, []
+    
     finally:
-        # Clean up temporary audio file if it exists
-        if 'audio_path' in locals() and os.path.exists(audio_path):
+        if audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except Exception as e:
                 logger.warning(f"Failed to remove temporary audio file: {e}")
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 # Alternative transcription models for better accuracy
 TRANSCRIPTION_MODELS = {
@@ -319,28 +425,38 @@ def transcribe_with_faster_whisper(
     model_size: str = 'large-v3',
     device: str = 'auto'
 ) -> Tuple[Optional[Dict], List[Dict]]:
-    """Transcribe audio using Faster Whisper for better accuracy and speed."""
+    """Transcribe audio using Faster Whisper for better accuracy and speed"""
     try:
+        # Get optimized device and settings
+        if device == 'auto':
+            device = get_device()
+        
+        optimizations = optimize_for_model(f"faster-whisper-{model_size}")
+        
+        logger.info(f"Using Faster Whisper on device: {device}")
+        log_gpu_status()
+        
         # Use Faster Whisper for better performance
+        compute_type = "float16" if device == "cuda" else "int8"
         model = WhisperModel(
             model_size,
             device=device,
-            compute_type="float16" if device == "cuda" else "int8",
+            compute_type=compute_type,
             download_root=None,
             local_files_only=False
         )
         
-        # Transcribe with better parameters
+        # Transcribe with optimized parameters
         segments, info = model.transcribe(
             audio_path,
             language=language,
-            beam_size=5,  # Better beam search
-            best_of=5,    # Keep best 5 candidates
-            temperature=0.0,  # Deterministic output
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=-1.0,
-            no_speech_threshold=0.6,
-            condition_on_previous_text=True,
+            beam_size=optimizations.get('beam_size', 5),
+            best_of=optimizations.get('best_of', 5),
+            temperature=optimizations.get('temperature', 0.0),
+            compression_ratio_threshold=optimizations.get('compression_ratio_threshold', 2.4),
+            log_prob_threshold=optimizations.get('log_prob_threshold', -1.0),
+            no_speech_threshold=optimizations.get('no_speech_threshold', 0.6),
+            condition_on_previous_text=optimizations.get('condition_on_previous_text', True),
             initial_prompt=None
         )
         
@@ -362,14 +478,30 @@ def transcribe_with_faster_whisper(
             result['text'] += segment.text.strip() + ' '
         
         result['text'] = result['text'].strip()
+        
+        # Clear GPU memory after transcription
+        clear_gpu_memory()
+        
         return result, result['segments']
         
     except Exception as e:
         logger.error(f"Error in transcribe_with_faster_whisper: {str(e)}", exc_info=True)
         return None, []
+    finally:
+        # Always clear GPU memory in finally block
+        clear_gpu_memory()
 
 def enhance_audio_quality(audio_path: str, enhanced_path: str) -> bool:
-    """Enhance audio quality for better transcription accuracy."""
+    """
+    Enhance audio quality for better transcription accuracy.
+    
+    Args:
+        audio_path: Path to the input audio file
+        enhanced_path: Path where the enhanced audio will be saved
+        
+    Returns:
+        bool: True if enhancement was successful, False otherwise
+    """
     try:
         # Load audio
         y, sr = librosa.load(audio_path, sr=16000)
@@ -390,7 +522,16 @@ def enhance_audio_quality(audio_path: str, enhanced_path: str) -> bool:
         return False
 
 def get_model_recommendations(video_path: str = None, language: str = 'en') -> Dict[str, Any]:
-    """Get model recommendations based on video characteristics and language."""
+    """
+    Get model recommendations based on video characteristics and language.
+    
+    Args:
+        video_path: Optional path to the video file for duration-based recommendations
+        language: Language code for language-specific recommendations
+        
+    Returns:
+        Dict[str, Any]: Dictionary containing model recommendations and explanations
+    """
     recommendations = {
         'fast': {
             'description': 'Fastest processing, lower accuracy',

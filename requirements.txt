@@ -1,5 +1,3 @@
-edge-tts==6.1.12
-elevenlabs==1.3.1
 # ------------------------
 # Core Web Framework
 # ------------------------
@@ -9,57 +7,145 @@ Werkzeug>=2.3.0
 # ------------------------
 # AI / NLP / ML
 # ------------------------
+numpy==1.24.3
+thinc==8.1.10
+spacy==3.7.2
+torch==2.0.1+cu118
+torchaudio==2.0.1+cu118
+torchvision==0.15.2+cu118
+# Ensure pip uses the correct index for CUDA-enabled PyTorch
+--extra-index-url https://download.pytorch.org/whl/cu118
 transformers==4.31.0
-torch>=2.2.0
-torchaudio>=2.0.2
 openai-whisper @ git+https://github.com/openai/whisper.git
+faster-whisper>=1.1.1
 scikit-learn>=1.4.2
-numpy==1.26.4
-scipy==1.12.0
+scipy==1.10.1
 pandas==2.0.3
+gensim==4.3.0
 
-# ------------------------
-# Audio / Speech Processing
-# ------------------------
+# # ------------------------
+# # Audio / Speech Processing
+# # ------------------------
+# pydub==0.25.1
+# librosa==0.10.0
+# soundfile==0.12.1
+
+# # ------------------------
+# # Image / Video Processing
+# # ------------------------
+# opencv-python==4.8.0.76
+# Pillow==9.5.0
+# pytesseract==0.3.10
+
+# # ------------------------
+# # Clustering & Summarization
+# # ------------------------
+# nltk==3.8.1
+# sentence-transformers==2.2.2
+# spacy==3.7.2
+# yake==0.4.8
+# gensim==4.3.2
+
+# # ------------------------
+# # Translation
+# # ------------------------
+# deep-translator==1.11.4
+
+# # ------------------------
+# # Utilities
+# # ------------------------
+# tqdm==4.66.1
+# python-dotenv==1.0.0
+# requests==2.31.0
+
+# # ------------------------
+# # Video Generation / Editing
+# # ------------------------
+# moviepy==1.0.3
+# ffmpeg-python==0.2.0
+
+
+# yt-dlp
+# faster-whisper
+# hdbscan
+
+# # ------------------------
+# # Advanced ML/AI Dependencies
+# # ------------------------
+# accelerate>=0.20.0
+# bitsandbytes>=0.41.0
+# sentence-transformers>=2.2.2
+# easyocr>=1.7.0
+# librosa>=0.10.0
+# soundfile>=0.12.1
+
+# # ------------------------
+# # Production Dependencies
+# # ------------------------
+# redis>=4.5.0
+# celery>=5.3.0
+# prometheus-client>=0.17.0
+# psutil>=5.9.0
+
+
+
+edge-tts==6.1.12
+elevenlabs==1.3.1
+Flask==2.3.3
+Werkzeug>=2.3.0
+
+# Core ML/NLP
+torch==2.5.1
+torchaudio==2.5.1
+torchvision==0.20.1
+transformers==4.48.2
+sentence-transformers==2.7.0
+scikit-learn>=1.5.2
+
+# Data handling
+numpy>=2.1.1
+scipy>=1.13.1
+pandas>=2.2.3
+
+# Audio
 pydub==0.25.1
-librosa==0.10.0
-soundfile==0.12.1
+librosa>=0.10.2
+soundfile>=0.12.1
 
-# ------------------------
-# Image / Video Processing
-# ------------------------
-opencv-python==4.8.0.76
-Pillow==9.5.0
+# Image/Video
+opencv-python==4.10.0.84
+Pillow>=10.4.0
 pytesseract==0.3.10
 
-# ------------------------
-# Clustering & Summarization
-# ------------------------
-nltk==3.8.1
-sentence-transformers==2.2.2
-spacy==3.7.2
+# NLP utils
+nltk>=3.9.1
+spacy==3.7.4
 yake==0.4.8
 gensim==4.3.2
 
-# ------------------------
 # Translation
-# ------------------------
 deep-translator==1.11.4
 
-# ------------------------
-# Utilities
-# ------------------------
-tqdm==4.66.1
-python-dotenv==1.0.0
-requests==2.31.0
+# Utils
+tqdm>=4.66.4
+python-dotenv==1.0.1
+requests>=2.32.3
 
-# ------------------------
-# Video Generation / Editing
-# ------------------------
+# Video editing
 moviepy==1.0.3
 ffmpeg-python==0.2.0
-
 
 yt-dlp
 faster-whisper
 hdbscan
+
+# Advanced ML
+accelerate>=0.30.1
+bitsandbytes>=0.43.0
+easyocr>=1.7.2
+
+# Production
+redis>=5.0.8
+celery>=5.3.6
+prometheus-client>=0.22.1
+psutil>=7.0.0

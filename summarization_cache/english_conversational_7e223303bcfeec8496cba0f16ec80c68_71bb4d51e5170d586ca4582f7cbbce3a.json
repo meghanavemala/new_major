@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "First we do 3 to the power of 2, which means 3 times 3, which is 9. Then the part inside the. Then we do three times three, or 3 times 9, or 9 times 3. Then, we do the same thing for the other part of the.",
+    "quality_score": 0.0,
+    "model_used": "bart_large_cnn",
+    "original_length": 22,
+    "summary_length": 48,
+    "compression_ratio": 2.1818181818181817,
+    "processing_time": 9.43892240524292,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T15:20:16.038237"
+  },
+  "timestamp": 1757325016.038237
+}

@@ -8,6 +8,7 @@ from nltk.tokenize import sent_tokenize
 import os
 import json
 from datetime import datetime
+from .gpu_config import get_device, is_gpu_available, optimize_for_model, clear_gpu_memory, log_gpu_status
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,15 +32,23 @@ class EnhancedSummarizer:
     def _load_local_model(self):
         """Load the local model if not already loaded"""
         if self.local_summarizer is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Get optimized device and settings
+            device = get_device()
+            optimizations = optimize_for_model(LOCAL_MODEL_NAME)
+            
+            logger.info(f"Using device: {device}")
+            log_gpu_status()
+            
             try:
                 self.local_summarizer = pipeline(
                     "summarization",
                     model=LOCAL_MODEL_NAME,
                     device=device,
-                    token=HUGGINGFACE_API_TOKEN
+                    token=HUGGINGFACE_API_TOKEN,
+                    torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
+                    framework='pt'
                 )
-                logger.info(f"Loaded local summarizer model on {device}")
+                logger.info(f"Loaded local summarizer model on {'GPU' if device == 'cuda' else 'CPU'}")
             except Exception as e:
                 logger.error(f"Error loading model: {str(e)}")
                 # Fallback to a smaller, public model if token is invalid
@@ -47,9 +56,11 @@ class EnhancedSummarizer:
                     self.local_summarizer = pipeline(
                         "summarization",
                         model="facebook/bart-base",
-                        device=device
+                        device=device,
+                        torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
+                        framework='pt'
                     )
-                    logger.info("Loaded fallback summarizer model")
+                    logger.info(f"Loaded fallback summarizer model on {'GPU' if device == 'cuda' else 'CPU'}")
                 except Exception as e:
                     logger.error(f"Failed to load fallback model: {str(e)}")
                     raise
@@ -105,16 +116,25 @@ class EnhancedSummarizer:
         self._load_local_model()
         
         try:
+            # Get optimization settings
+            optimizations = optimize_for_model(LOCAL_MODEL_NAME)
+            
             result = self.local_summarizer(
                 text,
                 min_length=MIN_SUMMARY_LENGTH,
                 max_length=MAX_SUMMARY_LENGTH,
-                do_sample=False
+                do_sample=False,
+                num_beams=optimizations.get('num_beams', 4),
+                early_stopping=optimizations.get('early_stopping', True),
+                truncation=True
             )
             return result[0]["summary_text"]
         except Exception as e:
             logger.error(f"Local summarization failed: {str(e)}")
             return text[:MAX_SUMMARY_LENGTH] + "..."
+        finally:
+            # Clear GPU memory after summarization
+            clear_gpu_memory()
 
     def summarize(self, text: str, cache_dir: Optional[str] = None) -> str:
         """
@@ -188,3 +208,10 @@ class EnhancedSummarizer:
         summary = self.summarize(text)
         sentences = sent_tokenize(summary)
         return sentences[:min(num_points, len(sentences))]
+    
+    def __del__(self):
+        """Cleanup GPU memory when object is destroyed"""
+        try:
+            clear_gpu_memory()
+        except Exception:
+            pass

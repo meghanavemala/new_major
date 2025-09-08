@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "4 plus 5 equals 9. So the part inside the parentheses can just parentheses anymore. Now that the parentheses are gone, we just have one operation left get a problem that has more than one set of parentheses, like this? 5 minus 3 plus 6 times 2. parentheses is 9 times 4, which equals 36.",
+    "quality_score": 0.3448144550403853,
+    "model_used": "bart_large_cnn",
+    "original_length": 89,
+    "summary_length": 55,
+    "compression_ratio": 0.6179775280898876,
+    "processing_time": 2.0146567821502686,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T15:20:43.516554"
+  },
+  "timestamp": 1757325043.516554
+}

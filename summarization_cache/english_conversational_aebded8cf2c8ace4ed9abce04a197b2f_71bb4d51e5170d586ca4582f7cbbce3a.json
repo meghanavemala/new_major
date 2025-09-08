@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "the next item, it switches them and then moves forward. It then repeats this until every single items in the list you want to sort list array. Sorry, ...",
+    "quality_score": 0.6071658163089452,
+    "model_used": "bart_large_xsum",
+    "original_length": 635,
+    "summary_length": 29,
+    "compression_ratio": 0.04566929133858268,
+    "processing_time": 9.087966442108154,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T14:08:20.617153"
+  },
+  "timestamp": 1757320700.617153
+}

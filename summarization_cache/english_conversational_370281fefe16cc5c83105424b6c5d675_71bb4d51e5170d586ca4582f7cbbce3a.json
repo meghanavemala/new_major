@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "\"Our rules tell us to do any operations inside these groups first. if you're a teenager, why do I need rules to tell me which operations to do first? Can't those rules are. basically four of them, and they go something like this\"",
+    "quality_score": 0.0,
+    "model_used": "bart_large_cnn",
+    "original_length": 48,
+    "summary_length": 43,
+    "compression_ratio": 0.8958333333333334,
+    "processing_time": 1.487501859664917,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T15:21:01.745420"
+  },
+  "timestamp": 1757325061.74542
+}

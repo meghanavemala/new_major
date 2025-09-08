@@ -31,6 +31,7 @@ from transformers import (
 import time
 import pickle
 from pathlib import Path
+from .gpu_config import get_device, is_gpu_available, optimize_for_model, clear_gpu_memory, log_gpu_status
 
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
@@ -112,9 +113,12 @@ def get_m2m100_model():
             logger.info("Loading M2M100 multilingual translation model...")
             model_name = "facebook/m2m100_418M"
             
-            # Check if CUDA is available
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # Get optimized device and settings
+            device = get_device()
+            optimizations = optimize_for_model("m2m100")
+            
             logger.info(f"Using device: {device}")
+            log_gpu_status()
             
             # Load tokenizer and model
             tokenizer = M2M100Tokenizer.from_pretrained(model_name)
@@ -123,7 +127,7 @@ def get_m2m100_model():
             translation_cache['m2m100_tokenizer'] = tokenizer
             translation_cache['m2m100_model'] = model
             
-            logger.info("M2M100 model loaded successfully")
+            logger.info("M2M100 model loaded successfully on GPU" if device == 'cuda' else "M2M100 model loaded successfully on CPU")
         except Exception as e:
             logger.error(f"Failed to load M2M100 model: {e}")
             return None, None
@@ -181,6 +185,9 @@ def translate_with_m2m100(text: str, source_lang: str, target_lang: str) -> Opti
         if not model or not tokenizer:
             return None
         
+        # Get optimization settings
+        optimizations = optimize_for_model("m2m100")
+        
         # Convert language codes to M2M100 format
         src_code = LANGUAGE_MAPPINGS.get(source_lang, {}).get('code', source_lang)
         tgt_code = LANGUAGE_MAPPINGS.get(target_lang, {}).get('code', target_lang)
@@ -195,14 +202,14 @@ def translate_with_m2m100(text: str, source_lang: str, target_lang: str) -> Opti
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # Generate translation
+        # Generate translation with optimized settings
         with torch.no_grad():
             generated_tokens = model.generate(
                 **inputs,
                 forced_bos_token_id=tokenizer.get_lang_id(tgt_code),
-                max_length=512,
-                num_beams=5,
-                early_stopping=True
+                max_length=optimizations.get('max_length', 512),
+                num_beams=optimizations.get('num_beams', 5),
+                early_stopping=optimizations.get('early_stopping', True)
             )
         
         # Decode translation
@@ -435,12 +442,17 @@ def translate_segments(
                         device = next(model.parameters()).device
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
-                        # Generate translation
+                        # Get optimization settings
+                        optimizations = optimize_for_model("m2m100")
+                        
+                        # Generate translation with optimized settings
                         with torch.no_grad():
                             generated_tokens = model.generate(
                                 **inputs,
                                 forced_bos_token_id=tokenizer.lang_code_to_id[tgt_code],
-                                max_length=512
+                                max_length=optimizations.get('max_length', 512),
+                                num_beams=optimizations.get('num_beams', 5),
+                                early_stopping=optimizations.get('early_stopping', True)
                             )
                         
                         # Decode the generated tokens
@@ -495,6 +507,9 @@ def translate_segments(
             f"Successfully translated {success_count}/{len(segments_to_translate)} "
             f"segments using {used_method} ({source_lang}->{target_lang})"
         )
+    
+    # Clear GPU memory after translation
+    clear_gpu_memory()
     
     return translated_segments
 #         if (i + 1) % 10 == 0:

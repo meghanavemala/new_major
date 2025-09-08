@@ -19,6 +19,7 @@ import random
 from typing import Optional, Tuple, Dict, List, Union
 from pathlib import Path
 from dataclasses import dataclass
+from .gpu_config import is_gpu_available, log_gpu_status
 
 # Supported video resolutions (width, height)
 SUPPORTED_RESOLUTIONS = {
@@ -35,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Video generation settings
+# Video generation settings with GPU acceleration support
 DEFAULT_SETTINGS = {
     'fps': 30,
     'transition_duration': 0.5,  # seconds
@@ -44,13 +45,31 @@ DEFAULT_SETTINGS = {
     'blur_radius': 15,  # For zoom/pan effect
     'zoom_factor': 1.1,  # 10% zoom for zoom effect
     'output_extension': '.mp4',
-    'video_codec': 'libx264',
+    'video_codec': 'libx264',  # Will be updated to GPU codec if available
     'audio_codec': 'aac',
     'pixel_format': 'yuv420p',
     'crf': 23,  # Constant Rate Factor (18-28 is good, lower is better quality)
     'audio_bitrate': '192k',
     'temp_dir': 'temp_video_frames'
 }
+
+def get_gpu_optimized_settings():
+    """Get GPU-optimized video encoding settings if GPU is available."""
+    settings = DEFAULT_SETTINGS.copy()
+    
+    if is_gpu_available():
+        # Use GPU-accelerated codecs when available
+        settings.update({
+            'video_codec': 'h264_nvenc',  # NVIDIA GPU encoder
+            'preset': 'fast',  # Faster encoding
+            'tune': 'hq',  # High quality
+            'rc': 'vbr',  # Variable bitrate
+        })
+        logger.info("Using GPU-accelerated video encoding")
+    else:
+        logger.info("Using CPU video encoding")
+    
+    return settings
 
 @dataclass
 class VideoFrame:
@@ -402,9 +421,13 @@ def make_summary_video(
     Returns:
         Final video file path if successful, otherwise None
     """
-    # Set up logging
+    # Set up logging and GPU status
     logging.basicConfig(level=getattr(logging, log_level.upper()),
                        format='%(asctime)s - %(levelname)s - %(message)s')
+    log_gpu_status()
+    
+    # Get GPU-optimized settings
+    settings = get_gpu_optimized_settings()
     
     # Validate inputs
     if not keyframes:
@@ -430,8 +453,14 @@ def make_summary_video(
     temp_video = output_path + "_temp.avi"
     final_video = output_path + ".mp4"
     
-    # Create video writer
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    # Create video writer with GPU-optimized codec if available
+    if settings['video_codec'] == 'h264_nvenc':
+        fourcc = cv2.VideoWriter_fourcc(*'H264')  # Use H.264 codec
+        logger.info("Using GPU-accelerated H.264 codec")
+    else:
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        logger.info("Using CPU XVID codec")
+    
     out = cv2.VideoWriter(temp_video, fourcc, fps, (width, height))
     if not out.isOpened():
         logger.error("Failed to create video writer with XVID codec.")
@@ -533,20 +562,30 @@ def make_summary_video(
                 logger.error(f"Temp audio file missing or too small: {temp_audio}")
                 return None
             
-            # Use FFmpeg to mux video and audio
-            cmd = [
-                'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
-                '-c:v', 'libx264', '-profile:v', 'main', '-preset', 'medium',
-                '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
-                '-shortest', '-movflags', '+faststart', final_video
-            ]
+            # Use FFmpeg to mux video and audio with GPU acceleration if available
+            if settings['video_codec'] == 'h264_nvenc':
+                cmd = [
+                    'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
+                    '-c:v', 'h264_nvenc', '-preset', settings.get('preset', 'fast'),
+                    '-rc', settings.get('rc', 'vbr'), '-crf', '23', '-pix_fmt', 'yuv420p',
+                    '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', final_video
+                ]
+                logger.info("Using GPU-accelerated FFmpeg encoding")
+            else:
+                cmd = [
+                    'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
+                    '-c:v', 'libx264', '-profile:v', 'main', '-preset', 'medium',
+                    '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+                    '-shortest', '-movflags', '+faststart', final_video
+                ]
+                logger.info("Using CPU FFmpeg encoding")
             
             # Execute FFmpeg command
             import subprocess
             try:
                 logger.info(f"Running FFmpeg: {' '.join(cmd)}")
                 result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE, text=True, timeout=120)
+                                     stderr=subprocess.PIPE, text=True, timeout=600)
                 logger.debug(f"FFmpeg output: {result.stdout}")
                 
                 if not os.path.exists(final_video) or os.path.getsize(final_video) < 1000:
@@ -565,6 +604,13 @@ def make_summary_video(
             except Exception as e:
                 logger.error(f"Unexpected error during FFmpeg processing: {str(e)}")
                 return None
+            finally:
+                for temp_file in [temp_video, temp_audio]:
+                    try:
+                        if temp_file and os.path.exists(temp_file):
+                            os.remove(temp_file)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove temp file {temp_file}: {e}")
         except Exception as e:
             logger.error(f"Error in make_summary_video: {str(e)}", exc_info=True)
             return None
@@ -575,6 +621,57 @@ def make_summary_video(
                         os.remove(temp_file)
                 except Exception as e:
                     logger.warning(f"Failed to remove temp file {temp_file}: {e}")
-    
-    # Return the final video path if everything succeeded
-    return final_video
+    else:
+        # No audio provided: convert/mux temp video to final MP4
+        try:
+            cmd = None
+            if settings['video_codec'] == 'h264_nvenc':
+                cmd = [
+                    'ffmpeg', '-y', '-i', temp_video,
+                    '-c:v', 'h264_nvenc', '-preset', settings.get('preset', 'fast'),
+                    '-rc', settings.get('rc', 'vbr'), '-crf', str(DEFAULT_SETTINGS.get('crf', 23)),
+                    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', final_video
+                ]
+                logger.info("Using GPU-accelerated FFmpeg encoding (no audio)")
+            else:
+                cmd = [
+                    'ffmpeg', '-y', '-i', temp_video,
+                    '-c:v', 'libx264', '-profile:v', 'main', '-preset', 'medium',
+                    '-crf', str(DEFAULT_SETTINGS.get('crf', 23)), '-pix_fmt', 'yuv420p',
+                    '-movflags', '+faststart', final_video
+                ]
+                logger.info("Using CPU FFmpeg encoding (no audio)")
+
+            import subprocess
+            logger.info(f"Running FFmpeg (video-only): {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+            logger.debug(f"FFmpeg output: {result.stdout}")
+
+            if not os.path.exists(final_video) or os.path.getsize(final_video) < 1000:
+                logger.error(f"Output video not created or too small: {final_video}")
+                # Attempt to fall back to copying temp video if possible
+                try:
+                    import shutil
+                    shutil.copyfile(temp_video, final_video)
+                except Exception:
+                    return None
+
+            return final_video
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg process timed out (no audio)!")
+            return None
+        except subprocess.CalledProcessError as e:
+            logger.error(f"FFmpeg error (no audio): {e.stderr}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during FFmpeg processing (no audio): {str(e)}")
+            return None
+        finally:
+            try:
+                if os.path.exists(temp_video):
+                    os.remove(temp_video)
+            except Exception as e:
+                logger.warning(f"Failed to remove temp file {temp_video}: {e}")
+
+    # Should not reach here
+    return None

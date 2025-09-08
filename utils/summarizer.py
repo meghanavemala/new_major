@@ -7,6 +7,7 @@ import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 import string
+from .gpu_config import get_device, is_gpu_available, optimize_for_model, clear_gpu_memory, log_gpu_status
 
 # Supported languages list and a safe stopwords loader to avoid NLTK LookupError
 SUPPORTED_LANGUAGES = {'en', 'hi', 'kn', 'te', 'ta', 'ml', 'mr', 'ur'}
@@ -278,25 +279,31 @@ def load_summarizer(language: str = 'en') -> Any:
             model_name = MODEL_CONFIGS[language]['model_name']
             logger.info(f"Loading {language} summarization model: {model_name}")
             
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # Get optimized device and settings
+            device = get_device()
+            optimizations = optimize_for_model(model_name)
+            
             logger.info(f"Using device: {device}")
+            log_gpu_status()
             
             # Load tokenizer and model
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
             
-            # Create pipeline
+            # Create pipeline with GPU optimizations
             SUMMARIZERS[language] = {
                 'pipeline': pipeline(
                     'summarization',
                     model=model,
                     tokenizer=tokenizer,
                     device=0 if device == 'cuda' else -1,
-                    framework='pt'
+                    framework='pt',
+                    torch_dtype=torch.float16 if device == 'cuda' else torch.float32
                 ),
-                'config': MODEL_CONFIGS[language]
+                'config': MODEL_CONFIGS[language],
+                'optimizations': optimizations
             }
-            logger.info(f"{language.capitalize()} summarization model loaded successfully.")
+            logger.info(f"{language.capitalize()} summarization model loaded successfully on {'GPU' if device == 'cuda' else 'CPU'}.")
             
         except Exception as e:
             logger.error(f"Error loading {language} summarization model: {e}")
@@ -384,11 +391,12 @@ def summarize_cluster(
             key_sentences = extract_key_sentences(processed_text, num_sentences=3, language=language)
             return ' '.join(key_sentences)
         
-        # Get model config
+        # Get model config and optimizations
         config = summarizer['config']
+        optimizations = summarizer.get('optimizations', {})
         
         # Split long text into chunks if needed (to avoid token limits)
-        max_chunk_length = 1024 if language == 'en' else 768
+        max_chunk_length = optimizations.get('max_length', 1024) if language == 'en' else 768
         if len(processed_text) > max_chunk_length:
             # Simple chunking by sentences
             sentences = sent_tokenize(processed_text) if language == 'en' else processed_text.split('।' if language in ['hi', 'mr'] else '॥')
@@ -409,19 +417,25 @@ def summarize_cluster(
             if current_chunk:
                 chunks.append(' '.join(current_chunk))
             
-            # Summarize each chunk
+            # Summarize each chunk with optimized settings
             chunk_summaries = []
             for chunk in chunks:
-                summary = summarizer['pipeline'](
-                    chunk,
-                    min_length=config['min_length'],
-                    max_length=config['max_length'],
-                    repetition_penalty=config['repetition_penalty'],
-                    length_penalty=config['length_penalty'],
-                    num_beams=config['num_beams'],
-                    truncation=True
-                )
-                chunk_summaries.append(summary[0]['summary_text'])
+                try:
+                    summary = summarizer['pipeline'](
+                        chunk,
+                        min_length=config['min_length'],
+                        max_length=config['max_length'],
+                        repetition_penalty=config['repetition_penalty'],
+                        length_penalty=config['length_penalty'],
+                        num_beams=optimizations.get('num_beams', config['num_beams']),
+                        early_stopping=optimizations.get('early_stopping', True),
+                        truncation=True,
+                        do_sample=False
+                    )
+                    chunk_summaries.append(summary[0]['summary_text'])
+                except Exception as e:
+                    logger.warning(f"Chunk summarization failed: {e}")
+                    chunk_summaries.append(chunk[:config['max_length']])
             
             # Combine chunk summaries
             combined_summary = ' '.join(chunk_summaries)
@@ -434,22 +448,26 @@ def summarize_cluster(
                     max_length=config['max_length'],
                     repetition_penalty=config['repetition_penalty'],
                     length_penalty=config['length_penalty'],
-                    num_beams=config['num_beams'],
-                    truncation=True
+                    num_beams=optimizations.get('num_beams', config['num_beams']),
+                    early_stopping=optimizations.get('early_stopping', True),
+                    truncation=True,
+                    do_sample=False
                 )
                 return final_summary[0]['summary_text']
             return combined_summary
         
         else:
-            # Process in one go if text is short enough
+            # Process in one go if text is short enough with optimized settings
             summary = summarizer['pipeline'](
                 cluster_text,
                 min_length=config['min_length'],
                 max_length=config['max_length'],
                 repetition_penalty=config['repetition_penalty'],
                 length_penalty=config['length_penalty'],
-                num_beams=config['num_beams'],
-                truncation=True
+                num_beams=optimizations.get('num_beams', config['num_beams']),
+                early_stopping=optimizations.get('early_stopping', True),
+                truncation=True,
+                do_sample=False
             )
             return summary[0]['summary_text']
     
@@ -462,3 +480,6 @@ def summarize_cluster(
         except Exception as e2:
             logger.error(f"Fallback summarization also failed: {e2}")
             return cluster_text[:500] + "..."  # Return first 500 chars as fallback
+    finally:
+        # Clear GPU memory after summarization
+        clear_gpu_memory()

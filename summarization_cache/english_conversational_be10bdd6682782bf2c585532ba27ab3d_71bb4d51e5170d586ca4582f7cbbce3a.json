@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "The algorithm divides the unsorted array into a sorted unit. The algorithm then goes one by one over the uns sorted array looking for the smallest number. Once the array has been completely looked over this iteration, it then puts the smallestNumber algorithms.",
+    "quality_score": 0.6196047927652086,
+    "model_used": "bart_large_cnn",
+    "original_length": 112,
+    "summary_length": 43,
+    "compression_ratio": 0.38392857142857145,
+    "processing_time": 1.3680510520935059,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T14:08:59.627793"
+  },
+  "timestamp": 1757320739.627793
+}

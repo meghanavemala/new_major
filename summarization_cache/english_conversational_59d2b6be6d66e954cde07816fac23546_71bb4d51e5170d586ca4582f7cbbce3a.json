@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Bubble Soar has an index that goes through the entire list. If the number is on is larger than the next item, it switches them and then moves forward....",
+    "quality_score": 0.5,
+    "model_used": "bart_large_cnn",
+    "original_length": 1127,
+    "summary_length": 29,
+    "compression_ratio": 0.025732031943212066,
+    "processing_time": 368.37036657333374,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T15:04:53.156125"
+  },
+  "timestamp": 1757324093.156125
+}

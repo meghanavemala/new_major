@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 import yt_dlp
 import subprocess
 from werkzeug.utils import secure_filename
+from .gpu_config import is_gpu_available, log_gpu_status
 
 
 def _get_max_upload_bytes(default: int = 100 * 1024 * 1024) -> int:
@@ -142,13 +143,25 @@ def handle_video_upload_or_download(request, upload_dir):
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
             try:
-                result = subprocess.run([
-                    "ffmpeg", "-i", temp_file,
-                    "-vcodec", "libx264", "-crf", "28",
-                    "-preset", "fast",
-                    "-acodec", "aac", "-b:a", "96k",
-                    compressed_path
-                ], capture_output=True, text=True, timeout=900)
+                # Use GPU-accelerated FFmpeg if available
+                if is_gpu_available():
+                    cmd = [
+                        "ffmpeg", "-i", temp_file,
+                        "-c:v", "h264_nvenc", "-preset", "fast",
+                        "-c:a", "aac", "-b:a", "96k",
+                        compressed_path
+                    ]
+                    log_gpu_status()
+                else:
+                    cmd = [
+                        "ffmpeg", "-i", temp_file,
+                        "-vcodec", "libx264", "-crf", "28",
+                        "-preset", "fast",
+                        "-acodec", "aac", "-b:a", "96k",
+                        compressed_path
+                    ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
                 if result.returncode != 0:
                     raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
@@ -213,13 +226,25 @@ def handle_video_upload_or_download_from_data(video_file_data, yt_url_data, uplo
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
             try:
-                result = subprocess.run([
-                    "ffmpeg", "-i", temp_file,
-                    "-vcodec", "libx264", "-crf", "28",
-                    "-preset", "fast",
-                    "-acodec", "aac", "-b:a", "96k",
-                    compressed_path
-                ], capture_output=True, text=True, timeout=900)
+                # Use GPU-accelerated FFmpeg if available
+                if is_gpu_available():
+                    cmd = [
+                        "ffmpeg", "-i", temp_file,
+                        "-c:v", "h264_nvenc", "-preset", "fast",
+                        "-c:a", "aac", "-b:a", "96k",
+                        compressed_path
+                    ]
+                    log_gpu_status()
+                else:
+                    cmd = [
+                        "ffmpeg", "-i", temp_file,
+                        "-vcodec", "libx264", "-crf", "28",
+                        "-preset", "fast",
+                        "-acodec", "aac", "-b:a", "96k",
+                        compressed_path
+                    ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
                 if result.returncode != 0:
                     raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
@@ -340,13 +365,25 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
         for attempt in range(max_retries):
             try:
                 if os.path.exists(final_temp_file):
-                    result = subprocess.run([
-                        "ffmpeg", "-i", final_temp_file,
-                        "-vcodec", "libx264", "-crf", "28",
-                        "-preset", "fast",
-                        "-acodec", "aac", "-b:a", "96k",
-                        compressed_path
-                    ], capture_output=True, text=True, timeout=900)
+                    # Use GPU-accelerated FFmpeg if available
+                    if is_gpu_available():
+                        cmd = [
+                            "ffmpeg", "-i", final_temp_file,
+                            "-c:v", "h264_nvenc", "-preset", "fast",
+                            "-c:a", "aac", "-b:a", "96k",
+                            compressed_path
+                        ]
+                        log_gpu_status()
+                    else:
+                        cmd = [
+                            "ffmpeg", "-i", final_temp_file,
+                            "-vcodec", "libx264", "-crf", "28",
+                            "-preset", "fast",
+                            "-acodec", "aac", "-b:a", "96k",
+                            compressed_path
+                        ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
                     if result.returncode != 0:
                         raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")

@@ -290,12 +290,34 @@ function startProgressTracking() {
         clearInterval(progressInterval);
     }
     
+    let retryCount = 0;
+    const maxRetries = 5;
+    
     progressInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/status/${currentVideoId}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+            if (retryCount >= maxRetries) {
+                clearInterval(progressInterval);
+                showError("Connection lost. Please refresh the page and try again.");
+                showUploadSection();
+                return;
             }
+
+            const response = await fetch(`/api/status/${currentVideoId}`, {
+                timeout: 10000, // 10 second timeout
+                headers: {
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache'
+                }
+            });
+            
+            if (!response.ok) {
+                retryCount++;
+                console.warn(`Status check failed, attempt ${retryCount} of ${maxRetries}`);
+                return;
+            }
+            
+            // Reset retry count on successful response
+            retryCount = 0;
             
             const status = await response.json();
             console.log('Progress update:', status);
@@ -308,7 +330,17 @@ function startProgressTracking() {
             } else if (status.status === 'error') {
                 console.error('Processing failed:', status.error);
                 clearInterval(progressInterval);
-                showError(`Processing failed: ${status.error}`);
+                
+                // Enhanced error messages
+                let errorMessage = status.error;
+                if (status.error.includes('No speech detected')) {
+                    errorMessage = 'No speech detected in the video. Please ensure your video has clear audio content. If you believe this is an error, try:\n' +
+                                 '1. Checking if the video has audio\n' +
+                                 '2. Increasing the audio volume\n' +
+                                 '3. Converting the video to MP4 format';
+                }
+                
+                showError(`Processing failed: ${errorMessage}`);
                 showUploadSection();
             }
             

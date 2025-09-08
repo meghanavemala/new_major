@@ -1,0 +1,18 @@
+{
+  "timestamp": 249.75404572486877,
+  "overall_health": "fair",
+  "component_status": {
+    "transcription": "healthy",
+    "keyframe_extraction": "unknown",
+    "topic_analysis": "unknown",
+    "summarization": "unknown",
+    "translation": "unknown",
+    "tts": "unknown",
+    "video_generation": "unknown",
+    "ocr": "unknown",
+    "audio_visual_sync": "unknown"
+  },
+  "performance_score": 55.0,
+  "uptime": 249.75404572486877,
+  "last_error": {
+    "timestamp": 

@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "I'm 2, which gives me 22 for a final answer. What makes you think that's the right answer? I need is right up here, and the correct answer is 22. Okay, so which one of these guys do and get 42 as our final answer? You'd better not copy my answer.",
+    "quality_score": 0.3963828667350438,
+    "model_used": "bart_large_cnn",
+    "original_length": 92,
+    "summary_length": 51,
+    "compression_ratio": 0.5543478260869565,
+    "processing_time": 2.391451120376587,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T15:21:07.204217"
+  },
+  "timestamp": 1757325067.204217
+}

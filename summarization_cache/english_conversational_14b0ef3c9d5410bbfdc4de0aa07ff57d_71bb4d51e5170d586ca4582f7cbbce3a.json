@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Bubble Soar has an index that goes through the entire list. If the number is on is larger than item in the list has properly been solved. So the worst case for Bubble Soar is big O of N squared, while the best case is big N of N.",
+    "quality_score": 0.15108429011033522,
+    "model_used": "bart_large_cnn",
+    "original_length": 70,
+    "summary_length": 49,
+    "compression_ratio": 0.7,
+    "processing_time": 8.695419788360596,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T14:08:07.425612"
+  },
+  "timestamp": 1757320687.425612
+}

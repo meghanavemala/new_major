@@ -24,6 +24,7 @@ from moviepy.config import change_settings
 # Configure moviepy to use ffmpeg
 change_settings({"FFMPEG_BINARY": "ffmpeg"})
 
+
 # Local imports
 from utils.video_maker import make_summary_video, add_subtitle_to_frame
 from utils.video_utils import (
@@ -42,10 +43,26 @@ from utils.transcriber import transcribe_video
 from utils.translator import translate_segments
 from utils.topic_analyzer import analyze_topic_segments
 from utils.enhanced_summarizer import EnhancedSummarizer
+from utils.production_summarizer import production_summarizer, summarize_text
+from utils.audio_visual_sync import audio_visual_synchronizer, synchronize_audio_visual
+from utils.advanced_ocr import advanced_ocr, extract_text_from_image
+from utils.production_monitor import production_monitor, monitor_performance, monitor_operation, get_monitoring_stats
 from utils.tts import text_to_speech
+from utils.gpu_config import log_gpu_status, clear_gpu_memory, is_gpu_available, force_gpu
+
+# --- GPU startup check ---
+import torch
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA GPU is not available! Please check your PyTorch installation and GPU drivers.")
+else:
+    print(f"[INFO] CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
 
 # Initialize the enhanced summarizer
 enhanced_summarizer = EnhancedSummarizer()
+
+# Initialize production monitoring
+production_monitor.start_monitoring(interval=30)
+production_monitor.start_prometheus_server(port=8000)
 
 from utils.downloader import is_youtube_url, handle_youtube_download
 from utils.transcriber import SUPPORTED_LANGUAGES as TRANSCRIBE_LANGS
@@ -157,6 +174,9 @@ def index():
     default_voice = request.cookies.get("preferred_voice", CONFIG["DEFAULT_VOICE"])
     dark_mode = request.cookies.get("dark_mode", "true") == "true"
 
+    # Log GPU status on startup
+    log_gpu_status()
+    
     return render_template(
         "index.html",
         languages=sorted_languages,
@@ -169,6 +189,7 @@ def index():
         supported_extensions=", ".join(CONFIG["SUPPORTED_EXTENSIONS"]),
         resolutions=SUPPORTED_RESOLUTIONS,
         default_resolution=CONFIG["DEFAULT_RESOLUTION"],
+        gpu_available=is_gpu_available(),
     )
 
 
@@ -252,6 +273,7 @@ def process():
     gc.collect()
     logger.info("Garbage collection completed")
 
+    @monitor_performance("video_processing")
     def process_video():
         nonlocal video_id
         try:
@@ -301,6 +323,7 @@ def process():
                 logger.error(f"FFmpeg test failed: {e}")
 
             update_processing_status(processing_status, video_id, "transcribing", 20, "Transcribing audio...")
+            production_monitor.update_component_status('transcription', 'healthy')
             transcription_language = source_language if source_language != "auto" else "english"
             logger.info(f"Starting transcription with language: {transcription_language}")
 
@@ -466,18 +489,37 @@ def process():
                     logger.info(f"Generating summary for topic {topic_id}: {topic_name}")
                     # Combine all segment texts for summarization
                     full_text = " ".join([s.get("text", "") for s in topic_segments])
-                    summary = enhanced_summarizer.summarize(
-                        text=full_text,
-                        cache_dir="translation_cache"
-                    )
-                    if not summary or len(summary.strip()) < 10:
-                        logger.warning(
-                            f"Generated summary for topic {topic_id} is too short, using fallback"
+                    
+                    # Use production summarizer with advanced features
+                    try:
+                        summary_result = summarize_text(
+                            text=full_text,
+                            language=target_language,
+                            content_type='conversational',
+                            target_length=150,
+                            quality_threshold=0.7
                         )
+                        
+                        summary = summary_result.get('summary', '')
+                        quality_score = summary_result.get('quality_score', 0.0)
+                        
+                        logger.info(f"Summary quality score: {quality_score:.2f}")
+                        
+                        if not summary or len(summary.strip()) < 10 or quality_score < 0.3:
+                            logger.warning(
+                                f"Generated summary for topic {topic_id} is too short or low quality, using fallback"
+                            )
+                            summary = (
+                                f"This segment discusses {topic_name}. "
+                                f"Key points include: {', '.join(keywords[:3])}."
+                            )
+                    except Exception as e:
+                        logger.error(f"Production summarization failed: {e}, using fallback")
                         summary = (
                             f"This segment discusses {topic_name}. "
                             f"Key points include: {', '.join(keywords[:3])}."
                         )
+                    
                     summaries.append(summary)
                     topic_names.append(topic_name)
                     topic_keywords.append(keywords)
@@ -579,9 +621,42 @@ def process():
                                 f"Failed to extract additional keyframes for topic {tmeta.get('id')}: {e}"
                             )
 
-                    # Cap to target count
+                    # Cap to target count (pre-sync)
                     if target_kf > 0 and len(topic_kfs) > target_kf:
                         topic_kfs = topic_kfs[:target_kf]
+
+                    # Audio-visual synchronization: reorder/select keyframes to align with TTS audio
+                    try:
+                        if tmeta.get("audio_path") and topic_kfs:
+                            # Reconstruct the original text segments for this topic (used by synchronizer)
+                            sync_segments = synchronize_audio_visual(
+                                audio_path=tmeta.get("audio_path"),
+                                segments=topic_segments,
+                                keyframes_dir=keyframes_dir,
+                                keyframe_metadata=topic_kfs,
+                            )
+                            # Flatten synchronized keyframes list while preserving order and uniqueness
+                            if sync_segments:
+                                seen = set()
+                                synced_kfs = []
+                                for seg_sync in sync_segments:
+                                    for kf in getattr(seg_sync, 'keyframes', []) or []:
+                                        fp = getattr(kf, 'filepath', None)
+                                        ts = getattr(kf, 'timestamp', None)
+                                        if fp and fp not in seen:
+                                            seen.add(fp)
+                                            synced_kfs.append({
+                                                'filepath': fp,
+                                                'timestamp': ts if ts is not None else 0.0,
+                                            })
+                                # If we obtained a reasonable synced list, use it (with a soft cap)
+                                if len(synced_kfs) >= max(1, min(len(topic_kfs), target_kf or len(topic_kfs)) // 2):
+                                    topic_kfs = synced_kfs
+                                    # Cap to target count (post-sync)
+                                    if target_kf > 0 and len(topic_kfs) > target_kf:
+                                        topic_kfs = topic_kfs[:target_kf]
+                    except Exception as e:
+                        logger.warning(f"Audio-visual synchronization skipped due to error: {e}")
 
                     if not topic_kfs:
                         logger.warning(
@@ -683,6 +758,9 @@ def process():
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}\n{traceback.format_exc()}")
             update_processing_status(processing_status, video_id, "error", 0, "An error occurred during processing", str(e))
+        finally:
+            # Clear GPU memory after processing
+            clear_gpu_memory()
 
     # Thread and Timer already imported at module level
 
@@ -709,9 +787,6 @@ def process():
     # thread = Thread(target=process_video)
     # thread.daemon = True
     # thread.start()
-    thread = Thread(target=process_video)
-    thread.daemon = True
-    thread.start()
 
     return jsonify(
         {
@@ -725,15 +800,118 @@ def process():
 @app.route("/api/status/<video_id>", methods=["GET"])
 def api_status(video_id: str):
     """Return current processing status for a given video_id."""
-    status = get_processing_status(processing_status, video_id)
-    # Include any extra result fields if present (e.g., summaries, keywords)
-    extra = processing_status.get(video_id, {}) or {}
-    merged = {**status}
-    for key in ("summaries", "keywords", "topic_videos", "final_summary_video", "message", "progress", "status", "error", "video_id"):
-        if key in extra:
-            merged[key] = extra[key]
-    merged.setdefault("video_id", video_id)
-    return jsonify(merged)
+    try:
+        status = get_processing_status(processing_status, video_id)
+        
+        # Check if the process is running but status is stale
+        if status.get('status') not in ['completed', 'error']:
+            last_updated = processing_status.get(video_id, {}).get('last_updated', 0)
+            if time.time() - last_updated > 300:  # 5 minutes
+                # Kill any hanging processes
+                logger.warning(f"Process {video_id} appears to be stalled. Marking as error.")
+                update_processing_status(
+                    processing_status,
+                    video_id,
+                    "error",
+                    status.get('progress', 0),
+                    "Processing stalled",
+                    "Process timed out - no updates received for 5 minutes"
+                )
+                return jsonify({
+                    "status": "error",
+                    "progress": status.get('progress', 0),
+                    "message": "Processing stalled",
+                    "error": "Process timed out - no updates received for 5 minutes",
+                    "video_id": video_id,
+                    "last_updated": time.time(),
+                    "stale_since": last_updated
+                })
+        
+        # Include any extra result fields if present
+        extra = processing_status.get(video_id, {}) or {}
+        merged = {**status}
+        for key in ("summaries", "keywords", "topic_videos", "final_summary_video", 
+                   "message", "progress", "status", "error", "video_id"):
+            if key in extra:
+                merged[key] = extra[key]
+        merged.setdefault("video_id", video_id)
+        
+        # Add timestamp to response
+        merged['timestamp'] = time.time()
+        return jsonify(merged)
+        
+    except Exception as e:
+        logger.error(f"Error getting status for video {video_id}: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "progress": 0,
+            "message": "Error checking status",
+            "error": str(e),
+            "video_id": video_id
+        }), 500
+
+@app.route("/api/gpu-status")
+def get_gpu_status():
+    """Get current GPU status and memory usage."""
+    from utils.gpu_config import gpu_config
+    return jsonify({
+        "gpu_available": is_gpu_available(),
+        "device": gpu_config.get_device(),
+        "gpu_info": gpu_config.gpu_info,
+        "memory_usage": gpu_config.get_memory_usage(),
+        "memory_info": gpu_config.memory_info
+    })
+
+@app.route("/api/health")
+def health_check():
+    """Comprehensive health check endpoint."""
+    try:
+        health_stats = get_monitoring_stats()
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "uptime": health_stats.get('uptime', 0),
+            "health_score": health_stats.get('health_score', 0),
+            "gpu_available": is_gpu_available(),
+            "monitoring": health_stats
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route("/api/metrics")
+def get_metrics():
+    """Get detailed performance metrics."""
+    try:
+        metrics = production_monitor.get_metrics_summary()
+        return jsonify(metrics)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/errors")
+def get_errors():
+    """Get error summary and recent errors."""
+    try:
+        errors = production_monitor.get_error_summary()
+        return jsonify(errors)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/performance")
+def get_performance():
+    """Get performance statistics."""
+    try:
+        stats = {
+            "summarization": production_summarizer.get_performance_stats(),
+            "ocr": advanced_ocr.get_performance_stats(),
+            "monitoring": get_monitoring_stats()
+        }
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/processed/<path:filename>")

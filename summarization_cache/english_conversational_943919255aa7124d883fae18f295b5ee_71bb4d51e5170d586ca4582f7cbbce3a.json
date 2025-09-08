@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Quicksor is the biggest really old, like around 1887 old. It was also used in the old IBM punch card machines that go all the way back to the 1920s. If you're interested, I have a video where I give 40 API's you should use for your next project.",
+    "quality_score": 0.6576538517018503,
+    "model_used": "bart_large_cnn",
+    "original_length": 156,
+    "summary_length": 49,
+    "compression_ratio": 0.3141025641025641,
+    "processing_time": 2.1435444355010986,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T14:08:40.157733"
+  },
+  "timestamp": 1757320720.157733
+}

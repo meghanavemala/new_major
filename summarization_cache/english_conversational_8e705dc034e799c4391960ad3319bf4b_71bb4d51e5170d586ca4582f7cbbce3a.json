@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "N is universally understood as the number of performance of big O and log n. Log n represents the amount of times n is divided. If our unsorted array is 16, then log n would be four. Radix sort is a big O. determined by time and space complexity.",
+    "quality_score": 0.8343982222242043,
+    "model_used": "bart_large_cnn",
+    "original_length": 215,
+    "summary_length": 49,
+    "compression_ratio": 0.22790697674418606,
+    "processing_time": 3.789635419845581,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-08T14:08:27.996972"
+  },
+  "timestamp": 1757320707.996972
+}
