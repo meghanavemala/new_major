@@ -429,12 +429,57 @@ def process():
                             seg_idx = min(i, len(segments) - 1)
                             segments[seg_idx]["text"] += f" [Visual context: {chunk}]"
                 logger.info(f"Starting topic analysis on {len(segments)} segments...")
-                # Removed unsupported parameters: min_segment_duration, max_topics, min_topic_duration, use_visual_context, visual_context
-                topics = analyze_topic_segments(
+                # Use technical topic analyzer for better topic detection and summarization
+                from utils.technical_topic_analyzer import TechnicalTopicAnalyzer
+                from utils.technical_summarizer import TechnicalSummarizer
+                
+                # Initialize technical components
+                topic_analyzer = TechnicalTopicAnalyzer()
+                tech_summarizer = TechnicalSummarizer()
+                
+                # Analyze and group topics
+                logger.info("Analyzing technical topics...")
+                topics_dir = os.path.join(CONFIG["PROCESSED_DIR"], str(video_id))
+                topics, timestamps_file, segments_file = topic_analyzer.analyze_segments(
                     segments=segments,
-                    language=target_language,
-                    user_prompt=user_prompt
+                    output_dir=topics_dir
                 )
+                
+                # Generate structured summaries for each topic
+                logger.info("Generating technical summaries...")
+                summaries_file = tech_summarizer.summarize_topics(
+                    topics=topics,
+                    output_dir=topics_dir
+                )
+                
+                # Load the generated summaries
+                with open(summaries_file, 'r', encoding='utf-8') as f:
+                    topic_summaries = json.load(f)
+                    
+                    # Process the structured summaries
+                    topics = []
+                    for topic_summary in topic_summaries:
+                        topic_id = topic_summary['topic_id']
+                        
+                        # Extract the data we need
+                        topic_entry = {
+                            'id': topic_id,
+                            'name': topic_summary['name'],
+                            'keywords': topic_summary['summary']['key_concepts'],
+                            'technical_terms': topic_summary['summary']['technical_terms'],
+                            'start_time': topic_summary['start_time'],
+                            'end_time': topic_summary['end_time'],
+                            'duration': topic_summary['end_time'] - topic_summary['start_time'],
+                            'summary': topic_summary['summary']['overview'],
+                            'examples': topic_summary['summary']['examples']
+                        }
+                        topics.append(topic_entry)
+                        
+                        # Mark segments with topic ID
+                        for segment in segments:
+                            if (topic_summary['start_time'] <= segment.get('start', 0) <= topic_summary['end_time'] or
+                                topic_summary['start_time'] <= segment.get('end', 0) <= topic_summary['end_time']):
+                                segment['topic_id'] = topic_id
                 if not topics:
                     raise ValueError("No coherent topics could be identified in the content")
                 logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")

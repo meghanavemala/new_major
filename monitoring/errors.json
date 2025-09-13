@@ -1,80 +1,143 @@
 [
   {
-    "timestamp": "2025-09-08T15:18:46.124935",
+    "timestamp": "2025-09-13T20:16:09.498136",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:19:17.156426",
+    "timestamp": "2025-09-13T20:16:40.530572",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:19:48.184060",
+    "timestamp": "2025-09-13T20:17:11.574460",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:20:19.211324",
+    "timestamp": "2025-09-13T20:17:42.597009",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High memory usage: 85.1%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:20:50.238008",
+    "timestamp": "2025-09-13T20:17:42.625421",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:21:21.262726",
+    "timestamp": "2025-09-13T20:18:13.692282",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High CPU usage: 90.4%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:21:52.284523",
+    "timestamp": "2025-09-13T20:18:13.713485",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High memory usage: 86.8%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:22:23.316872",
+    "timestamp": "2025-09-13T20:18:13.716499",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",
     "resolved": false
   },
   {
-    "timestamp": "2025-09-08T15:22:54.347264",
+    "timestamp": "2025-09-13T20:18:44.751822",
     "error_type": "performance_warning",
-    "error_message": "High disk usage: 99.8%",
+    "error_message": "High disk usage: 99.5%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:19:15.776265",
+    "error_type": "performance_warning",
+    "error_message": "High disk usage: 99.5%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:19:46.856190",
+    "error_type": "performance_warning",
+    "error_message": "High memory usage: 87.7%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:19:46.873309",
+    "error_type": "performance_warning",
+    "error_message": "High disk usage: 99.5%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:20:17.944894",
+    "error_type": "performance_warning",
+    "error_message": "High memory usage: 85.3%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:20:17.950989",
+    "error_type": "performance_warning",
+    "error_message": "High disk usage: 99.5%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:20:48.988917",
+    "error_type": "performance_warning",
+    "error_message": "High memory usage: 85.8%",
+    "stack_trace": "NoneType: None\n",
+    "context": {},
+    "severity": "warning",
+    "resolved": false
+  },
+  {
+    "timestamp": "2025-09-13T20:20:48.997516",
+    "error_type": "performance_warning",
+    "error_message": "High disk usage: 99.5%",
     "stack_trace": "NoneType: None\n",
     "context": {},
     "severity": "warning",

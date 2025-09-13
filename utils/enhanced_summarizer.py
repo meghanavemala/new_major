@@ -209,6 +209,95 @@ class EnhancedSummarizer:
         sentences = sent_tokenize(summary)
         return sentences[:min(num_points, len(sentences))]
     
+    def extract_key_concepts(self, text: str, num_keywords: int = 10) -> List[str]:
+        """
+        Extract key concepts from text using multiple methods for better results
+        
+        Args:
+            text: Input text
+            num_keywords: Number of keywords to extract
+            
+        Returns:
+            List of key concepts/keywords
+        """
+        try:
+            import yake
+            from nltk.tokenize import word_tokenize
+            from nltk.corpus import stopwords
+            from nltk.stem import WordNetLemmatizer
+            import nltk
+            
+            # Download required NLTK data
+            try:
+                nltk.data.find('tokenizers/punkt')
+                nltk.data.find('corpora/stopwords')
+                nltk.data.find('corpora/wordnet')
+            except LookupError:
+                nltk.download('punkt')
+                nltk.download('stopwords')
+                nltk.download('wordnet')
+            
+            # Clean text
+            text = re.sub(r'[^\w\s]', ' ', text)
+            text = text.lower()
+            
+            # Initialize YAKE keyword extractor
+            kw_extractor = yake.KeywordExtractor(
+                lan="en",
+                n=2,  # Extract 1-2 word keywords
+                dedupLim=0.7,  # Similarity threshold for duplicate removal
+                dedupFunc='seqm',
+                windowsSize=2,
+                top=num_keywords * 2  # Get more keywords than needed for filtering
+            )
+            
+            # Get keywords using YAKE
+            keywords = kw_extractor.extract_keywords(text)
+            
+            # Initialize lemmatizer and get stop words
+            lemmatizer = WordNetLemmatizer()
+            stop_words = set(stopwords.words('english'))
+            
+            # Process and filter keywords
+            processed_keywords = []
+            seen = set()
+            
+            for keyword, score in keywords:
+                # Split multi-word keywords
+                words = word_tokenize(keyword)
+                
+                # Process each word
+                processed_words = []
+                for word in words:
+                    # Lemmatize and check if it's a valid word
+                    if (
+                        word not in stop_words and
+                        len(word) > 2 and  # Skip very short words
+                        not word.isnumeric()  # Skip numbers
+                    ):
+                        lemma = lemmatizer.lemmatize(word)
+                        if lemma not in seen:
+                            processed_words.append(lemma)
+                            seen.add(lemma)
+                
+                if processed_words:
+                    # Join multi-word concepts back together
+                    concept = ' '.join(processed_words)
+                    if concept not in processed_keywords:
+                        processed_keywords.append(concept)
+            
+            # Return top keywords
+            return processed_keywords[:num_keywords]
+            
+        except Exception as e:
+            logger.error(f"Error in keyword extraction: {str(e)}")
+            # Fallback to simple word frequency if advanced extraction fails
+            words = word_tokenize(text.lower())
+            words = [w for w in words if w.isalnum() and len(w) > 2]
+            from collections import Counter
+            word_freq = Counter(words).most_common(num_keywords)
+            return [word for word, _ in word_freq]
+    
     def __del__(self):
         """Cleanup GPU memory when object is destroyed"""
         try:

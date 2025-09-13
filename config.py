@@ -4,6 +4,9 @@ import os
 
 def load_config() -> Dict[str, Any]:
     """Return application configuration with environment overrides."""
+    # Configure PyTorch CUDA memory allocator
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:128'
+    
     return {
         "UPLOAD_DIR": os.environ.get("UPLOAD_DIR", "uploads"),
         "PROCESSED_DIR": os.environ.get("PROCESSED_DIR", "processed"),
@@ -16,6 +19,7 @@ def load_config() -> Dict[str, Any]:
         "ENABLE_DARK_MODE": os.environ.get("ENABLE_DARK_MODE", "true").lower() == "true",
         "SECRET_KEY": os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production"),
         "PARALLEL_DOWNLOADS": int(os.environ.get("PARALLEL_DOWNLOADS", "5")),
+        "LOW_VRAM_MODE": os.environ.get("LOW_VRAM_MODE", "True").lower() == 'true',
     }
 
 

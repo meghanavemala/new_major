@@ -1,13 +1,21 @@
+import os
 import logging
 import re
+import gc
 from typing import List, Dict, Any, Optional, Set
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, BartForConditionalGeneration
 import torch
+from torch.cuda.amp import autocast
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 import string
 from .gpu_config import get_device, is_gpu_available, optimize_for_model, clear_gpu_memory, log_gpu_status
+from config import load_config
+
+# Enable memory efficient attention globally
+os.environ['PYTORCH_TRANSFORMERS_CACHE'] = 'cache'  # Cache models locally
+torch.hub.set_dir('cache')  # Set torch hub cache directory
 
 # Supported languages list and a safe stopwords loader to avoid NLTK LookupError
 SUPPORTED_LANGUAGES = {'en', 'hi', 'kn', 'te', 'ta', 'ml', 'mr', 'ur'}
@@ -86,23 +94,46 @@ logger = logging.getLogger(__name__)
 #     nltk.download('punkt')
 #     nltk.download('stopwords')
 
-# Initialize models as None. They will be loaded on first use.
-SUMMARIZERS = {
-    'en': None,  # English
-    'hi': None,  # Hindi
-    'kn': None   # Kannada
-}
+# Enhanced summarizer
+from .enhanced_summarizer import EnhancedSummarizer
 
-# Model configurations for different languages
-MODEL_CONFIGS = {
-    'en': {
-        'model_name': 'facebook/bart-large-cnn',
+# Initialize enhanced summarizer
+ENHANCED_SUMMARIZER = None
+
+def get_summarizer():
+    global ENHANCED_SUMMARIZER
+    if ENHANCED_SUMMARIZER is None:
+        ENHANCED_SUMMARIZER = EnhancedSummarizer()
+    return ENHANCED_SUMMARIZER
+
+# Load config to check for Low VRAM mode
+app_config = load_config()
+LOW_VRAM_MODE = app_config.get("LOW_VRAM_MODE", True)
+
+if LOW_VRAM_MODE:
+    logger.info("Low VRAM mode is enabled. Using distilbart for English summarization.")
+    english_model_config = {
+        'model_name': 'sshleifer/distilbart-cnn-12-6',
         'min_length': 30,
+        'max_length': 80,  # Shorter length for a smaller model
+        'repetition_penalty': 2.0,
+        'length_penalty': 1.0,
+        'num_beams': 2,      # Fewer beams to conserve memory
+    }
+else:
+    logger.info("Low VRAM mode is disabled. Using pegasus-large for English summarization.")
+    english_model_config = {
+        'model_name': 'google/pegasus-large',
+        'min_length': 50,
         'max_length': 130,
         'repetition_penalty': 2.5,
         'length_penalty': 1.0,
         'num_beams': 4,
-    },
+    }
+
+# Model configurations
+MODEL_CONFIGS = {
+    'en': english_model_config,
     'hi': {
         'model_name': 'csebuetnlp/mT5_multilingual_XLSum',
         'min_length': 30,
@@ -288,18 +319,14 @@ def load_summarizer(language: str = 'en') -> Any:
             
             # Load tokenizer and model
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
+            model = BartForConditionalGeneration.from_pretrained(model_name).to(device)
+            model.to(torch.float16 if device == 'cuda' else torch.float32)
             
-            # Create pipeline with GPU optimizations
+            # Store model and tokenizer
             SUMMARIZERS[language] = {
-                'pipeline': pipeline(
-                    'summarization',
-                    model=model,
-                    tokenizer=tokenizer,
-                    device=0 if device == 'cuda' else -1,
-                    framework='pt',
-                    torch_dtype=torch.float16 if device == 'cuda' else torch.float32
-                ),
+                'model': model,
+                'tokenizer': tokenizer,
+                'device': device,
                 'config': MODEL_CONFIGS[language],
                 'optimizations': optimizations
             }
@@ -312,174 +339,92 @@ def load_summarizer(language: str = 'en') -> Any:
     return SUMMARIZERS[language]
 
 def summarize_cluster(
-    cluster: List[Dict[str, Any]], 
+    cluster: List[Dict[str, Any]],
     language: str = 'en',
     use_extractive: bool = False,
     remove_fillers: bool = True,
     user_prompt: str = None
 ) -> str:
     """
-    Generate a summary for a cluster of text segments with language-aware preprocessing.
-    
-    Args:
-        cluster: List of text segments with 'text' keys
-        language: Language code ('en', 'hi', 'kn', 'te', 'ta', 'ml', 'mr', 'ur')
-        use_extractive: Whether to use extractive summarization (faster but less coherent)
-        remove_fillers: Whether to remove filler words and stopwords before summarization
-        user_prompt: Optional user prompt to guide summarization focus
-        
-    Returns:
-        Generated summary text with improved language-specific preprocessing
+    Generate a memory-efficient summary for a cluster of text segments.
     """
     if not cluster:
         return "No content to summarize."
-    
-    # Combine all text from the cluster
+
+    # 1. Combine text and preprocess
     cluster_text = " ".join([seg.get('text', '') for seg in cluster if seg.get('text')])
-    
-    if not cluster_text.strip():
-        return "No content to summarize."
-    
-    # If user prompt is provided, enhance the text with prompt context
-    if user_prompt and user_prompt.strip():
-        # Add user prompt as context to guide summarization
-        enhanced_text = f"{cluster_text} [Focus on: {user_prompt}]"
-        cluster_text = enhanced_text
-    
-    # Normalize language code
-    language = language.lower()
-    if language not in SUPPORTED_LANGUAGES:
-        logger.warning(f"Unsupported language: {language}. Defaulting to English.")
-        language = 'en'
-    
+    if user_prompt:
+        cluster_text = f"{user_prompt} [CONTEXT] {cluster_text}"
+
+    processed_text = preprocess_text(cluster_text, language, remove_fillers)
+    if len(processed_text.split()) < 20:
+        return processed_text if processed_text.strip() else "No meaningful content to summarize."
+
+    # 2. Handle extractive summarization
+    if use_extractive or language != 'en':
+        key_sentences = extract_key_sentences(processed_text, num_sentences=3, language=language)
+        return ' '.join(key_sentences) if key_sentences else processed_text
+
+    # 3. Abstractive summarization with memory management
     try:
-        # Preprocess text with language-specific cleaning and stopword removal
-        processed_text = preprocess_text(
-            cluster_text, 
-            language=language, 
-            remove_fillers=remove_fillers
-        )
-        
-        # For very short texts after preprocessing, just return as is
-        if language == 'en':
-            try:
-                tokens = word_tokenize(processed_text)
-            except LookupError:
-                try:
-                    nltk.download('punkt', quiet=True)
-                    tokens = word_tokenize(processed_text)
-                except Exception:
-                    tokens = processed_text.split()
-        else:
-            tokens = processed_text.split()
-        if len(tokens) < 20:  # Reduced threshold due to stopword removal
-            return processed_text if processed_text.strip() else "No meaningful content to summarize."
-        
-        # Use extractive summarization for non-English or as a fallback
-        if use_extractive or language != 'en':
-            key_sentences = extract_key_sentences(
-                processed_text, 
-                num_sentences=min(3, max(1, len(tokens) // 20)),  # Dynamic number of sentences
-                language=language
-            )
-            return ' '.join(key_sentences) if key_sentences else processed_text
-        
-        # Use abstractive summarization for English
-        summarizer = load_summarizer(language)
-        if not summarizer:
-            logger.warning(f"Falling back to extractive summarization for {language}")
-            key_sentences = extract_key_sentences(processed_text, num_sentences=3, language=language)
-            return ' '.join(key_sentences)
-        
-        # Get model config and optimizations
-        config = summarizer['config']
-        optimizations = summarizer.get('optimizations', {})
-        
-        # Split long text into chunks if needed (to avoid token limits)
-        max_chunk_length = optimizations.get('max_length', 1024) if language == 'en' else 768
-        if len(processed_text) > max_chunk_length:
-            # Simple chunking by sentences
-            sentences = sent_tokenize(processed_text) if language == 'en' else processed_text.split('।' if language in ['hi', 'mr'] else '॥')
-            chunks = []
-            current_chunk = []
-            current_length = 0
-            
-            for sent in sentences:
-                sent_tokens = word_tokenize(sent) if language == 'en' else sent.split()
-                sent_length = len(sent_tokens)
-                if current_length + sent_length > max_chunk_length and current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                    current_chunk = []
-                    current_length = 0
-                current_chunk.append(sent)
-                current_length += sent_length
-            
-            if current_chunk:
-                chunks.append(' '.join(current_chunk))
-            
-            # Summarize each chunk with optimized settings
-            chunk_summaries = []
-            for chunk in chunks:
-                try:
-                    summary = summarizer['pipeline'](
-                        chunk,
-                        min_length=config['min_length'],
-                        max_length=config['max_length'],
-                        repetition_penalty=config['repetition_penalty'],
-                        length_penalty=config['length_penalty'],
-                        num_beams=optimizations.get('num_beams', config['num_beams']),
-                        early_stopping=optimizations.get('early_stopping', True),
-                        truncation=True,
-                        do_sample=False
-                    )
-                    chunk_summaries.append(summary[0]['summary_text'])
-                except Exception as e:
-                    logger.warning(f"Chunk summarization failed: {e}")
-                    chunk_summaries.append(chunk[:config['max_length']])
-            
-            # Combine chunk summaries
-            combined_summary = ' '.join(chunk_summaries)
-            
-            # Final summary of combined chunk summaries if still too long
-            if len(word_tokenize(combined_summary)) > 100:
-                final_summary = summarizer['pipeline'](
-                    combined_summary,
-                    min_length=config['min_length'],
-                    max_length=config['max_length'],
-                    repetition_penalty=config['repetition_penalty'],
-                    length_penalty=config['length_penalty'],
-                    num_beams=optimizations.get('num_beams', config['num_beams']),
-                    early_stopping=optimizations.get('early_stopping', True),
-                    truncation=True,
-                    do_sample=False
-                )
-                return final_summary[0]['summary_text']
-            return combined_summary
-        
-        else:
-            # Process in one go if text is short enough with optimized settings
-            summary = summarizer['pipeline'](
-                cluster_text,
-                min_length=config['min_length'],
-                max_length=config['max_length'],
-                repetition_penalty=config['repetition_penalty'],
-                length_penalty=config['length_penalty'],
-                num_beams=optimizations.get('num_beams', config['num_beams']),
-                early_stopping=optimizations.get('early_stopping', True),
-                truncation=True,
-                do_sample=False
-            )
-            return summary[0]['summary_text']
-    
-    except Exception as e:
-        logger.error(f"Error in summarize_cluster: {e}", exc_info=True)
-        # Fallback to extractive summarization
-        try:
-            key_sentences = extract_key_sentences(cluster_text, num_sentences=3, language=language)
-            return ' '.join(key_sentences)
-        except Exception as e2:
-            logger.error(f"Fallback summarization also failed: {e2}")
-            return cluster_text[:500] + "..."  # Return first 500 chars as fallback
-    finally:
-        # Clear GPU memory after summarization
         clear_gpu_memory()
+        summarizer_payload = load_summarizer(language)
+        if not summarizer_payload:
+            raise RuntimeError(f"Failed to load summarizer for {language}")
+
+        model = summarizer_payload['model']
+        tokenizer = summarizer_payload['tokenizer']
+        device = summarizer_payload['device']
+        config = summarizer_payload['config']
+
+        # 4. Chunk the text for memory efficiency
+        max_chunk_length = 512  # Model's max token length
+        sentences = sent_tokenize(processed_text)
+        chunks = []
+        current_chunk = ""
+        for sentence in sentences:
+            if len(tokenizer.encode(current_chunk + ' ' + sentence)) > max_chunk_length:
+                chunks.append(current_chunk)
+                current_chunk = sentence
+            else:
+                current_chunk += ' ' + sentence
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        # 5. Summarize each chunk
+        chunk_summaries = []
+        for chunk in chunks:
+            try:
+                inputs = tokenizer(chunk, return_tensors="pt", max_length=1024, truncation=True).to(device)
+                
+                with torch.no_grad(), autocast(enabled=(device=='cuda')):
+                    summary_ids = model.generate(
+                        inputs['input_ids'],
+                        num_beams=config.get('num_beams', 2),
+                        max_length=config.get('max_length', 150),
+                        min_length=config.get('min_length', 30),
+                        length_penalty=config.get('length_penalty', 1.5),
+                        repetition_penalty=config.get('repetition_penalty', 2.0),
+                        early_stopping=True
+                    )
+                summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+                chunk_summaries.append(summary)
+            finally:
+                del inputs, summary_ids
+                clear_gpu_memory()
+
+        # 6. Combine and finalize
+        combined_summary = ' '.join(chunk_summaries)
+        if len(combined_summary.split()) > config.get('max_length', 150):
+             # Final summarization of the combined summaries if too long
+             return summarize_cluster([{'text': combined_summary}], language, False, False, None)
+
+        return combined_summary
+
+    except Exception as e:
+        logger.error(f"Error in abstractive summarization: {e}", exc_info=True)
+        key_sentences = extract_key_sentences(processed_text, num_sentences=3, language=language)
+        return ' '.join(key_sentences) if key_sentences else processed_text[:500] + "..."
+    finally:
+        clear_gpu_memory()
+    

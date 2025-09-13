@@ -30,21 +30,35 @@ class GPUConfig:
         self._configure_torch()
         
     def _detect_device(self) -> str:
-        """Detect the best available device (GPU or CPU)."""
+        """Detect the best available device (GPU or CPU) and apply a unified memory configuration."""
         try:
             if torch.cuda.is_available():
-                # Test CUDA capability
+                # 1. Set allocator config to reduce fragmentation.
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+                # 2. Set a conservative memory limit (e.g., 60% of 4GB is ~2.4GB)
+                # This leaves room for OS and other processes.
+                # On a 4GB card, this is safer than letting PyTorch take everything.
+                torch.cuda.set_per_process_memory_fraction(0.6)
+
+                # 3. Clear cache and collect garbage before starting.
+                torch.cuda.empty_cache()
+                gc.collect()
+
+                # 4. Test allocation to confirm device is working.
                 test_tensor = torch.tensor([1.0], device='cuda')
                 del test_tensor
-                device = 'cuda'
                 torch.cuda.empty_cache()
+
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                limit = total_memory * 0.6
                 logger.info(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
-                # Set environment variable to enable GPU
+                logger.info(f"GPU Memory Limit set to: {limit / (1024**3):.2f} GB")
                 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-                return device
+                return 'cuda'
         except Exception as e:
             logger.warning(f"CUDA initialization failed: {str(e)}")
-        
+
         logger.warning("CUDA is not available or failed to initialize. Using CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         return 'cpu'
@@ -81,18 +95,14 @@ class GPUConfig:
         }
     
     def _configure_torch(self):
-        """Configure PyTorch for optimal GPU usage."""
+        """Configure PyTorch for optimal GPU usage with memory efficiency."""
         if self.device == 'cuda':
-            # Enable cuDNN benchmarking for consistent input sizes
+            # These settings are generally good for performance.
             torch.backends.cudnn.benchmark = True
-            
-            # Enable cuDNN deterministic mode for reproducibility
-            torch.backends.cudnn.deterministic = False
-            
-            # Set memory fraction to avoid OOM errors
-            torch.cuda.set_per_process_memory_fraction(0.9)
-            
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
             logger.info("PyTorch configured for GPU optimization")
+        # All memory-specific configurations are now handled in _detect_device.
     
     def get_device(self) -> str:
         """Get the current device."""
@@ -109,16 +119,16 @@ class GPUConfig:
             
     def get_memory_usage(self) -> Dict[str, Dict[str, float]]:
         """Get GPU and CPU memory usage.
-        
+
         Returns:
             Dict containing GPU and CPU memory usage in GB
         """
         memory_info = {}
         
         # Get CPU memory usage
-        cpu = psutil.Process()
-        cpu_memory = cpu.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
-        total_cpu_memory = psutil.virtual_memory().total / (1024 * 1024 * 1024)  # Convert to GB
+        cpu_process = psutil.Process(os.getpid())
+        cpu_memory = cpu_process.memory_info().rss / (1024 ** 3)  # Convert to GB
+        total_cpu_memory = psutil.virtual_memory().total / (1024 ** 3)  # Convert to GB
         memory_info['cpu'] = {
             'used': round(cpu_memory, 2),
             'total': round(total_cpu_memory, 2)
@@ -126,56 +136,43 @@ class GPUConfig:
         
         # Get GPU memory usage if available
         if self.is_gpu_available():
-            gpu_memory = torch.cuda.memory_allocated(0) / (1024 * 1024 * 1024)  # Convert to GB
-            total_gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 * 1024 * 1024)
+            allocated = torch.cuda.memory_allocated(0) / (1024 ** 3)
+            reserved = torch.cuda.memory_reserved(0) / (1024 ** 3)
+            total_gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
             memory_info['gpu'] = {
-                'used': round(gpu_memory, 2),
+                'allocated': round(allocated, 2),
+                'reserved': round(reserved, 2),
                 'total': round(total_gpu_memory, 2)
             }
         else:
-            memory_info['gpu'] = {'used': 0, 'total': 0}
+            memory_info['gpu'] = {'allocated': 0, 'reserved': 0, 'total': 0}
         
         return memory_info
-        # Get available GPU memory
-        memory_available = self.gpu_info['memory_total'] - self.gpu_info['memory_allocated']
-        
-        # Estimate batch size based on model and available memory
-        if model_name and 'whisper' in model_name.lower():
-            if 'large' in model_name.lower():
-                return min(4, max(1, memory_available // (2 * 1024**3)))  # 2GB per batch
-            elif 'medium' in model_name.lower():
-                return min(8, max(1, memory_available // (1 * 1024**3)))  # 1GB per batch
-            else:
-                return min(16, max(1, memory_available // (512 * 1024**2)))  # 512MB per batch
-        else:
-            # Default batch size for other models
-            return min(8, max(1, memory_available // (1 * 1024**3)))
-    
+
     def clear_gpu_memory(self):
-        """Clear GPU memory cache."""
+        """Aggressively clear GPU memory cache."""
         if self.is_gpu_available():
-            torch.cuda.empty_cache()
             gc.collect()
-            logger.info("GPU memory cleared")
-    
-    def get_memory_usage(self) -> Dict[str, float]:
-        """Get current memory usage in MB."""
-        if not self.is_gpu_available():
-            return {'gpu_allocated': 0, 'gpu_cached': 0, 'cpu_used': self.memory_info['used'] / 1024**2}
-        
-        return {
-            'gpu_allocated': torch.cuda.memory_allocated(0) / 1024**2,
-            'gpu_cached': torch.cuda.memory_reserved(0) / 1024**2,
-            'cpu_used': self.memory_info['used'] / 1024**2
-        }
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            logger.info("GPU memory cleared aggressively")
     
     def optimize_for_model(self, model_name: str) -> Dict[str, Any]:
         """Get optimization settings for specific models."""
+        # Clear any existing cache
+        self.clear_gpu_memory()
+        
+        # Memory settings are handled globally now, but we can still clear cache.
+        if self.is_gpu_available():
+            torch.cuda.empty_cache()
+        
         optimizations = {
             'device': self.device,
             'batch_size': self.get_optimal_batch_size(model_name),
             'fp16': self.is_gpu_available(),  # Use mixed precision on GPU
             'torch_compile': False,  # Disable for now due to compatibility issues
+            'low_memory': True,  # Enable memory efficient attention
+            'max_memory': {'cuda:0': '3GB'},  # Limit GPU memory usage
         }
         
         # Model-specific optimizations
@@ -237,7 +234,6 @@ def get_optimal_batch_size(model_name: str = None) -> int:
 def get_memory_usage() -> Dict[str, Dict[str, float]]:
     """Get GPU and CPU memory usage."""
     return gpu_config.get_memory_usage()
-    return gpu_config.get_optimal_batch_size(model_name)
 
 def optimize_for_model(model_name: str) -> Dict[str, Any]:
     """Get optimization settings for specific models."""

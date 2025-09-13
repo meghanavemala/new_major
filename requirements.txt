@@ -7,21 +7,32 @@ Werkzeug>=2.3.0
 # ------------------------
 # AI / NLP / ML
 # ------------------------
-numpy==1.24.3
+ 
 thinc==8.1.10
 spacy==3.7.2
-torch==2.0.1+cu118
-torchaudio==2.0.1+cu118
-torchvision==0.15.2+cu118
-# Ensure pip uses the correct index for CUDA-enabled PyTorch
---extra-index-url https://download.pytorch.org/whl/cu118
-transformers==4.31.0
+ 
+transformers>=4.31.0
+sentence-transformers>=2.2.2
 openai-whisper @ git+https://github.com/openai/whisper.git
 faster-whisper>=1.1.1
 scikit-learn>=1.4.2
-scipy==1.10.1
-pandas==2.0.3
-gensim==4.3.0
+ 
+ 
+gensim==4.3.2
+nltk>=3.8.1
+yake>=0.4.8
+rouge-score>=0.1.2
+hdbscan>=0.8.33
+
+# Image/Video Processing
+opencv-python>=4.8.0
+Pillow>=9.5.0
+pytesseract>=0.3.10
+moviepy>=1.0.3
+pydub>=0.25.1
+
+# YouTube Support
+yt-dlp>=2023.7.6
 
 # # ------------------------
 # # Audio / Speech Processing

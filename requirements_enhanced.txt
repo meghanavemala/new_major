@@ -1,0 +1,22 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.30.0
+sentence-transformers>=2.2.2
+nltk>=3.8.1
+numpy>=1.24.0
+scikit-learn>=1.3.0
+hdbscan>=0.8.33
+spacy>=3.6.0
+yake>=0.4.8
+rouge-score>=0.1.2
+
+# Language models
+tensorflow>=2.13.0
+tokenizers>=0.13.3
+
+# Text processing
+gensim>=4.3.1
+kneed>=0.8.5
+
+# Install language models
+#python -m spacy download en_core_web_sm

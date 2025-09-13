@@ -8,7 +8,7 @@ import librosa
 import soundfile as sf
 from pydub import AudioSegment
 from faster_whisper import WhisperModel
-from .gpu_config import get_device
+from .gpu_config import get_device, clear_gpu_memory
 from .config import SUPPORTED_LANGUAGES, get_smart_model_size
 from .audio_utils import extract_audio, enhance_audio_quality
 
@@ -356,10 +356,13 @@ def transcribe_video(
                         logger.info(f"GPU transcription successful: {len(segments)} segments")
                 except RuntimeError as e:
                     if 'CUDA out of memory' in str(e):
-                        logger.warning("CUDA OOM error, falling back to CPU")
+                        logger.warning("CUDA OOM error, falling back to CPU. Clearing GPU memory.")
                         device = 'cpu'
-                        model_size = 'small'
-                        torch.cuda.empty_cache()
+                        model_size = 'small'  # Fallback to a smaller model for CPU
+                        # Explicitly delete the model and clear memory
+                        if 'model' in locals():
+                            del model
+                        clear_gpu_memory()
                     else:
                         raise
             
@@ -408,8 +411,8 @@ def transcribe_video(
             except Exception as e:
                 logger.warning(f"Failed to remove temporary audio file: {e}")
         
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # Aggressively clear GPU memory
+        clear_gpu_memory()
 
 # Alternative transcription models for better accuracy
 TRANSCRIPTION_MODELS = {

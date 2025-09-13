@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Every programmer has ran into at least one sorting algorithm at one point in their career. Today, I'm going to easily explain 10 of the most popular s...",
+    "quality_score": 0.5100537059295118,
+    "model_used": "bart_large_xsum",
+    "original_length": 1990,
+    "summary_length": 28,
+    "compression_ratio": 0.01407035175879397,
+    "processing_time": 68.057199716568,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-13T20:19:49.539953"
+  },
+  "timestamp": 1757774989.539953
+}

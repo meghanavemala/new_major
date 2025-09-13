@@ -646,55 +646,90 @@ def analyze_topic_segments(
     logger.info(f"Clustering {len(segments)} segments into {n_topics} topics...")
     
     try:
-        if embeddings is None:
-            raise RuntimeError("No embeddings available")
-        # Cluster segments using faster MiniBatchKMeans
-        kmeans = MiniBatchKMeans(n_clusters=n_topics, random_state=42, n_init=10, batch_size=max(32, n_topics * 8))
-        cluster_labels = kmeans.fit_predict(embeddings)
+        # Use enhanced clustering
+        from .enhanced_clustering import EnhancedClusterAnalyzer
+        
+        logger.info(f"Using enhanced clustering for {len(segments)} segments...")
+        analyzer = EnhancedClusterAnalyzer()
+        enhanced_clusters = analyzer.cluster_segments(segments)
+        
+        if not enhanced_clusters:
+            logger.warning("Enhanced clustering returned no clusters, falling back to simpler method")
+            raise RuntimeError("No clusters found")
+            
+        # Convert enhanced clusters to topic format
+        topics = []
+        for topic_id, cluster in enumerate(enhanced_clusters):
+            # Get all text for this topic
+            topic_texts = [s['text'] for s in cluster]
+            
+            # Extract keywords and entities
+            keywords = extract_topic_keywords(topic_texts, language=language)
+            entities = [] if fast_mode else extract_named_entities(topic_texts)
+            
+            # Generate topic name
+            topic_name = generate_topic_name(keywords, entities, user_prompt)
+            
+            # Get time range
+            start_time = min(s['start'] for s in cluster)
+            end_time = max(s['end'] for s in cluster)
+            
+            # Store cluster information
+            for s in cluster:
+                s['topic_id'] = topic_id
+                
+            topics.append({
+                'id': topic_id,
+                'name': topic_name,
+                'keywords': keywords,
+                'entities': entities,
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'segment_count': len(cluster),
+                'embedding_used': 'deberta',
+                'coherence_score': analyzer.analyze_cluster_coherence(cluster)
+            })
+            
     except Exception as e:
-        logger.error(f"Error in embedding-based clustering, falling back to TF-IDF: {e}")
-        # Fallback to TF-IDF if embedding fails
+        logger.error(f"Error in enhanced clustering, falling back to TF-IDF: {e}")
+        # Fallback to TF-IDF if enhanced clustering fails
         vectorizer = TfidfVectorizer(max_features=1000)
         X = vectorizer.fit_transform(texts)
         kmeans = MiniBatchKMeans(n_clusters=n_topics, random_state=42, n_init=10, batch_size=max(32, n_topics * 8))
         cluster_labels = kmeans.fit_predict(X)
-    
-    # Assign cluster IDs to segments
-    for i, segment in enumerate(segments):
-        segment['topic_id'] = int(cluster_labels[i])
-    
-    # Group segments by topic and process each topic
-    topics = []
-    for topic_id in range(n_topics):
-        topic_segments = [s for s in segments if s['topic_id'] == topic_id]
-        if not topic_segments:
-            continue
+        
+        # Process clusters as before
+        for i, segment in enumerate(segments):
+            segment['topic_id'] = int(cluster_labels[i])
+        
+        topics = []
+        for topic_id in range(n_topics):
+            topic_segments = [s for s in segments if s['topic_id'] == topic_id]
+            if not topic_segments:
+                continue
             
-        # Get all text for this topic
-        topic_texts = [s['text'] for s in topic_segments]
-        
-        # Extract keywords (YAKE or fallback). Skip heavy NER in fast mode.
-        keywords = extract_topic_keywords(topic_texts, language=language)
-        entities = [] if fast_mode else extract_named_entities(topic_texts)
-        
-        # Generate topic name with user prompt consideration
-        topic_name = generate_topic_name(keywords, entities, user_prompt)
-        
-        # Get time range for this topic
-        start_time = min(s['start'] for s in topic_segments)
-        end_time = max(s['end'] for s in topic_segments)
-        
-        topics.append({
-            'id': topic_id,
-            'name': topic_name,
-            'keywords': keywords,
-            'entities': entities,
-            'start_time': start_time,
-            'end_time': end_time,
-            'duration': end_time - start_time,
-            'segment_count': len(topic_segments),
-            'embedding_used': 'multilingual' if 'embedder' in locals() else 'tfidf'
-        })
+            topic_texts = [s['text'] for s in topic_segments]
+            keywords = extract_topic_keywords(topic_texts, language=language)
+            entities = [] if fast_mode else extract_named_entities(topic_texts)
+            topic_name = generate_topic_name(keywords, entities, user_prompt)
+            
+            start_time = min(s['start'] for s in topic_segments)
+            end_time = max(s['end'] for s in topic_segments)
+            
+            topics.append({
+                'id': topic_id,
+                'name': topic_name,
+                'keywords': keywords,
+                'entities': entities,
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'segment_count': len(topic_segments),
+                'embedding_used': 'tfidf'
+            })
+    
+    return topics
     
     logger.info(f"Identified {len(topics)} distinct topics")
     return topics
