@@ -26,6 +26,7 @@ def load_config() -> Dict[str, Any]:
         "OPENROUTER_CLUSTERING_MODEL": os.environ.get("OPENROUTER_CLUSTERING_MODEL", "anthropic/claude-3.5-sonnet"),
         "OPENROUTER_SUMMARY_MODEL": os.environ.get("OPENROUTER_SUMMARY_MODEL", "anthropic/claude-3.5-sonnet"),
         "USE_OPENROUTER": os.environ.get("USE_OPENROUTER", "true").lower() == "true",
+        "OPENROUTER_PREPROCESS_TEXT": os.environ.get("OPENROUTER_PREPROCESS_TEXT", "true").lower() == "true",
     }
 
 

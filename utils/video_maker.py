@@ -54,20 +54,22 @@ DEFAULT_SETTINGS = {
 }
 
 def get_gpu_optimized_settings():
-    """Get GPU-optimized video encoding settings if GPU is available."""
+    """Get video encoding settings with CPU encoding by default."""
     settings = DEFAULT_SETTINGS.copy()
     
-    if is_gpu_available():
-        # Use GPU-accelerated codecs when available
-        settings.update({
-            'video_codec': 'h264_nvenc',  # NVIDIA GPU encoder
-            'preset': 'fast',  # Faster encoding
-            'tune': 'hq',  # High quality
-            'rc': 'vbr',  # Variable bitrate
-        })
-        logger.info("Using GPU-accelerated video encoding")
-    else:
-        logger.info("Using CPU video encoding")
+    # Use CPU encoding by default for compatibility
+    # GPU encoding (NVENC) requires newer drivers and causes issues on some systems
+    logger.info("Using CPU video encoding for maximum compatibility")
+    
+    # Uncomment below to enable GPU encoding if you have compatible drivers
+    # if is_gpu_available():
+    #     settings.update({
+    #         'video_codec': 'h264_nvenc',
+    #         'preset': 'fast',
+    #         'tune': 'hq',
+    #         'rc': 'vbr',
+    #     })
+    #     logger.info("Using GPU-accelerated video encoding")
     
     return settings
 
@@ -453,17 +455,35 @@ def make_summary_video(
     temp_video = output_path + "_temp.avi"
     final_video = output_path + ".mp4"
     
-    # Create video writer with GPU-optimized codec if available
-    if settings['video_codec'] == 'h264_nvenc':
-        fourcc = cv2.VideoWriter_fourcc(*'H264')  # Use H.264 codec
-        logger.info("Using GPU-accelerated H.264 codec")
-    else:
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        logger.info("Using CPU XVID codec")
+    # Create video writer with fallback codec options
+    codecs_to_try = [
+        ('MP4V', 'MP4V codec'),
+        ('XVID', 'XVID codec'), 
+        ('MJPG', 'MJPEG codec'),
+        ('X264', 'X264 codec')
+    ]
     
-    out = cv2.VideoWriter(temp_video, fourcc, fps, (width, height))
-    if not out.isOpened():
-        logger.error("Failed to create video writer with XVID codec.")
+    out = None
+    for codec_fourcc, codec_name in codecs_to_try:
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+            out = cv2.VideoWriter(temp_video, fourcc, fps, (width, height))
+            if out.isOpened():
+                logger.info(f"Using {codec_name}")
+                break
+            else:
+                logger.warning(f"Failed to initialize {codec_name}")
+                if out is not None:
+                    out.release()
+                    out = None
+        except Exception as e:
+            logger.warning(f"Error trying {codec_name}: {e}")
+            if out is not None:
+                out.release()
+                out = None
+    
+    if out is None or not out.isOpened():
+        logger.error("Failed to create video writer with any available codec.")
         return None
         
     # Calculate total frames based on audio duration or default
@@ -562,59 +582,78 @@ def make_summary_video(
                 logger.error(f"Temp audio file missing or too small: {temp_audio}")
                 return None
             
-            # Use FFmpeg to mux video and audio with GPU acceleration if available
+            # Try FFmpeg with fallback from GPU to CPU encoding
+            encoding_attempts = []
+            
+            # Attempt 1: GPU encoding (if requested)
             if settings['video_codec'] == 'h264_nvenc':
-                cmd = [
+                encoding_attempts.append({
+                    'name': 'GPU-accelerated',
+                    'cmd': [
+                        'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
+                        '-c:v', 'h264_nvenc', '-preset', 'fast',
+                        '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+                        '-shortest', '-movflags', '+faststart', final_video
+                    ]
+                })
+            
+            # Attempt 2: CPU encoding (always available as fallback)
+            encoding_attempts.append({
+                'name': 'CPU libx264',
+                'cmd': [
                     'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
-                    '-c:v', 'h264_nvenc', '-preset', settings.get('preset', 'fast'),
-                    '-rc', settings.get('rc', 'vbr'), '-crf', '23', '-pix_fmt', 'yuv420p',
-                    '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', final_video
-                ]
-                logger.info("Using GPU-accelerated FFmpeg encoding")
-            else:
-                cmd = [
-                    'ffmpeg', '-y', '-i', temp_video, '-i', temp_audio,
-                    '-c:v', 'libx264', '-profile:v', 'main', '-preset', 'medium',
+                    '-c:v', 'libx264', '-preset', 'medium',
                     '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
                     '-shortest', '-movflags', '+faststart', final_video
                 ]
-                logger.info("Using CPU FFmpeg encoding")
+            })
             
-            # Execute FFmpeg command
+            # Execute FFmpeg command with fallback
             import subprocess
-            try:
-                logger.info(f"Running FFmpeg: {' '.join(cmd)}")
-                result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE, text=True, timeout=600)
-                logger.debug(f"FFmpeg output: {result.stdout}")
-                
-                if not os.path.exists(final_video) or os.path.getsize(final_video) < 1000:
-                    logger.error(f"Output video not created or too small: {final_video}")
-                    return None
+            last_error = None
+            
+            for attempt in encoding_attempts:
+                try:
+                    logger.info(f"Trying {attempt['name']} encoding...")
+                    logger.debug(f"Running FFmpeg: {' '.join(attempt['cmd'])}")
                     
-                logger.info(f"Successfully created summary video: {final_video}")
-                return final_video
-                
-            except subprocess.TimeoutExpired:
-                logger.error("FFmpeg process timed out!")
-                return None
-            except subprocess.CalledProcessError as e:
-                logger.error(f"FFmpeg error: {e.stderr}")
-                return None
-            except Exception as e:
-                logger.error(f"Unexpected error during FFmpeg processing: {str(e)}")
-                return None
-            finally:
-                for temp_file in [temp_video, temp_audio]:
-                    try:
-                        if temp_file and os.path.exists(temp_file):
-                            os.remove(temp_file)
-                    except Exception as e:
-                        logger.warning(f"Failed to remove temp file {temp_file}: {e}")
-        except Exception as e:
-            logger.error(f"Error in make_summary_video: {str(e)}", exc_info=True)
+                    result = subprocess.run(
+                        attempt['cmd'], 
+                        check=True, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE, 
+                        text=True, 
+                        timeout=600
+                    )
+                    
+                    logger.debug(f"FFmpeg output: {result.stdout}")
+                    
+                    if os.path.exists(final_video) and os.path.getsize(final_video) > 1000:
+                        logger.info(f"Successfully created summary video with {attempt['name']}: {final_video}")
+                        return final_video
+                    else:
+                        logger.warning(f"{attempt['name']} encoding produced invalid output")
+                        continue
+                        
+                except subprocess.CalledProcessError as e:
+                    last_error = e
+                    logger.warning(f"{attempt['name']} encoding failed: {e.stderr}")
+                    continue
+                except subprocess.TimeoutExpired:
+                    last_error = "FFmpeg process timed out"
+                    logger.warning(f"{attempt['name']} encoding timed out")
+                    continue
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"{attempt['name']} encoding error: {str(e)}")
+                    continue
+            
+            # All encoding attempts failed
+            logger.error(f"All FFmpeg encoding attempts failed. Last error: {last_error}")
             return None
+            
         finally:
+            # Clean up temp files
             for temp_file in [temp_video, temp_audio]:
                 try:
                     if temp_file and os.path.exists(temp_file):

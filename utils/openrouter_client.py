@@ -2,7 +2,29 @@
 OpenRouter Client Module
 
 This module provides integration with OpenRouter API for:
-1. Text clustering using advanced language models
+1. Text clustering using adva                # Sorting algorithm names - CRITICAL FIXES (with proper capitalization)
+                r'\bBubble [Ss]oar\b': 'Bubble Sort',
+                r'\bbubble soar\b': 'bubble sort',
+                r'\bQuick [Ss]oar\b': 'Quicksort', 
+                r'\bquick soar\b': 'quicksort',
+                r'\bQuicksor\b': 'Quicksort',
+                r'\bquicksor\b': 'quicksort',
+                r'\bQuick [Ss]or\b': 'Quicksort',
+                r'\bquick sor\b': 'quicksort',
+                r'\bTim [Ss]oar\b': 'Timsort',
+                r'\btim soar\b': 'timsort',
+                r'\bTim [Ss]ort\b': 'Timsort',
+                r'\btim sort\b': 'timsort',
+                r'\bHeap [Ss]oar\b': 'Heapsort',
+                r'\bheap soar\b': 'heapsort',
+                r'\bHeapsor\b': 'Heapsort',
+                r'\bheapsor\b': 'heapsort',
+                r'\bMerge [Ss]oar\b': 'Merge Sort',
+                r'\bmerge soar\b': 'merge sort',
+                r'\bInsertion [Ss]oar\b': 'Insertion Sort',
+                r'\binsertion soar\b': 'insertion sort',
+                r'\bSelection [Ss]oar\b': 'Selection Sort',
+                r'\bselection soar\b': 'selection sort',e models
 2. Topic-based summarization
 3. Intelligent content analysis
 """
@@ -35,6 +57,9 @@ class OpenRouterClient:
         # Default model configurations
         self.clustering_model = os.environ.get("OPENROUTER_CLUSTERING_MODEL", "anthropic/claude-3.5-sonnet")
         self.summary_model = os.environ.get("OPENROUTER_SUMMARY_MODEL", "anthropic/claude-3.5-sonnet")
+        
+        # Error correction settings
+        self.enable_preprocessing = os.environ.get("OPENROUTER_PREPROCESS_TEXT", "true").lower() == "true"
         
     def _make_request(self, endpoint: str, data: dict, max_retries: int = 3) -> dict:
         """Make a request to OpenRouter API with retry logic"""
@@ -72,6 +97,121 @@ class OpenRouterClient:
                     
         raise Exception(f"Failed to get response after {max_retries} attempts")
 
+    def _preprocess_text(self, text: str) -> str:
+        """Preprocess text to fix obvious transcription errors"""
+        if not self.enable_preprocessing:
+            logger.info("Text preprocessing disabled")
+            return text
+        
+        logger.debug(f"Preprocessing text: {text[:100]}...")
+            
+        try:
+            import re
+            
+            # Common transcription error fixes
+            fixes = {
+                # Algorithm-related terms
+                r'\balgorythms\b': 'algorithms',
+                r'\balgorythm\b': 'algorithm',
+                r'\balgorthms\b': 'algorithms',
+                r'\balgorthm\b': 'algorithm',
+                r'\balgorith\b': 'algorithm',
+                r'\balgo\b': 'algorithm',
+                
+                # Performance terms
+                r'\bcomparsion\b': 'comparison',
+                r'\bperformence\b': 'performance',
+                r'\befficienty\b': 'efficiency',
+                r'\boptimisation\b': 'optimization',
+                
+                # Implementation terms
+                r'\bimplemention\b': 'implementation',
+                r'\bexampel\b': 'example',
+                r'\bfuntion\b': 'function',
+                r'\bmetod\b': 'method',
+                
+                # Common words
+                r'\bteh\b': 'the',
+                r'\band and\b': 'and',
+                r'\btha\b': 'the',
+                r'\bwith with\b': 'with',
+                r'\bis is\b': 'is',
+                r'\bwill will\b': 'will',
+                r'\bcan can\b': 'can',
+                r'\bin in\b': 'in',
+                r'\bto to\b': 'to',
+                
+                # Sorting algorithm names - CRITICAL FIXES (with proper capitalization)
+                r'\bBubble [Ss]oar\b': 'Bubble Sort',
+                r'\bbubble soar\b': 'bubble sort',
+                r'\bQuick [Ss]oar\b': 'Quicksort', 
+                r'\bquick soar\b': 'quicksort',
+                r'\bQuicksor\b': 'Quicksort',
+                r'\bquicksor\b': 'quicksort',
+                r'\bQuick [Ss]or\b': 'Quicksort',
+                r'\bquick sor\b': 'quicksort',
+                r'\bTim [Ss]oar\b': 'Timsort',
+                r'\btim soar\b': 'timsort',
+                r'\bTim [Ss]ort\b': 'Timsort', 
+                r'\btim sort\b': 'timsort',
+                r'\bHeap [Ss]oar\b': 'Heapsort',
+                r'\bheap soar\b': 'heapsort',
+                r'\bHeapsor\b': 'Heapsort',
+                r'\bheapsor\b': 'heapsort',
+                r'\bMerge [Ss]oar\b': 'Merge Sort',
+                r'\bmerge soar\b': 'merge sort',
+                r'\bInsertion [Ss]oar\b': 'Insertion Sort',
+                r'\binsertion soar\b': 'insertion sort',
+                r'\bSelection [Ss]oar\b': 'Selection Sort',
+                r'\bselection soar\b': 'selection sort',
+                
+                # General sorting terms
+                r'\bsort sort\b': 'sort',
+                r'\bbuble\b': 'bubble',
+                r'\bquick sort\b': 'quicksort',
+                r'\bmerge sort\b': 'merge sort',
+                r'\bheap sort\b': 'heapsort',
+                
+                # Programming terms
+                r'\baray\b': 'array',
+                r'\belist\b': 'list',
+                r'\bvariabel\b': 'variable',
+                r'\bindx\b': 'index',
+                
+                # Remove filler words and fix spacing
+                r'\s+um\s+': ' ',
+                r'\s+uh\s+': ' ',
+                r'\s+like\s+': ' ',
+                r'\s+you know\s+': ' ',
+                
+                # Fix repeated words (general pattern)
+                r'\b(\w+)\s+\1\b': r'\1',
+                
+                # Fix spacing around punctuation
+                r'\s+([,.!?;:])': r'\1',
+                r'([,.!?;:])\s*([A-Z])': r'\1 \2',
+                
+                # Fix multiple spaces
+                r'\s+': ' '
+            }
+            
+            processed = text
+            changes_made = []
+            for pattern, replacement in fixes.items():
+                old_processed = processed
+                processed = re.sub(pattern, replacement, processed, flags=re.IGNORECASE)
+                if processed != old_processed:
+                    changes_made.append(f"{pattern} -> {replacement}")
+            
+            if changes_made:
+                logger.info(f"Text preprocessing made {len(changes_made)} corrections")
+            
+            return processed.strip()
+            
+        except Exception as e:
+            logger.warning(f"Text preprocessing failed: {e}")
+            return text
+
     def cluster_text_into_topics(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Use OpenRouter model to intelligently cluster text segments into coherent topics
@@ -83,43 +223,68 @@ class OpenRouterClient:
             List of topic clusters with metadata
         """
         try:
-            # Prepare the text for analysis
-            full_text = "\n".join([f"[{seg['start']:.2f}-{seg['end']:.2f}s] {seg['text']}" for seg in segments])
+            # Prepare the text for analysis with preprocessing
+            processed_segments = []
+            for seg in segments:
+                processed_text = self._preprocess_text(seg['text'])
+                processed_segments.append(f"[{seg['start']:.2f}-{seg['end']:.2f}s] {processed_text}")
+            
+            full_text = "\n".join(processed_segments)
             
             # Create the clustering prompt
-            system_prompt = """You are an expert content analyst. Your task is to analyze a video transcript and intelligently group the content into coherent topics.
+            system_prompt = """You are an expert content analyst and editor. Your task is to analyze a video transcript and intelligently group the content into coherent topics.
 
-Instructions:
-1. Read through the entire transcript carefully
-2. Identify natural topic boundaries based on content shifts
-3. Group related segments into coherent topics
-4. Each topic should have a clear theme and contain related content
-5. Provide meaningful names for each topic
-6. Include start/end timestamps for each topic
-7. Aim for 3-8 topics depending on content length and complexity
+IMPORTANT: The transcript may contain transcription errors, spelling mistakes, and grammatical issues. Your job is to:
+
+1. **Understand the intended meaning** despite transcription errors
+2. **Correct spelling and grammatical mistakes** while preserving the original intent
+3. **Identify natural topic boundaries** based on content shifts
+4. **Create meaningful, descriptive topic names** that reflect the actual content
+5. **Generate clean, professional descriptions** free from transcription errors
+
+Content Analysis Guidelines:
+- Look beyond surface-level transcription errors to understand the core concepts
+- Group related segments that discuss the same subject matter
+- Each topic should represent a distinct concept or theme
+- Aim for 3-8 topics depending on content length and complexity
+- Topic names should be clear, descriptive, and professional
 
 Return your analysis as a JSON object with this exact structure:
 {
   "topics": [
     {
       "id": 1,
-      "name": "Topic Name",
-      "description": "Brief description of what this topic covers",
+      "name": "Clear Descriptive Topic Name",
+      "description": "Clean, error-free description of what this topic covers",
       "start_time": 0.0,
       "end_time": 120.5,
-      "keywords": ["keyword1", "keyword2", "keyword3"],
+      "keywords": ["corrected_keyword1", "corrected_keyword2", "corrected_keyword3"],
       "segment_indices": [0, 1, 2, 3]
     }
   ]
 }
 
-Make sure the JSON is valid and complete."""
+Make sure the JSON is valid and complete. All text should be grammatically correct and professional."""
 
-            user_prompt = f"""Analyze this video transcript and cluster it into coherent topics:
+            user_prompt = f"""Analyze this video transcript and cluster it into coherent topics. 
 
+TRANSCRIPT (may contain transcription errors):
 {full_text}
 
-Please provide a comprehensive topic analysis following the specified JSON format."""
+CRITICAL TRANSCRIPTION ERROR PATTERNS TO FIX:
+- Algorithm names: "bubble soar" → "bubble sort", "quick soar" → "quicksort", "tim soar" → "timsort"
+- Common errors: "Quicksor" → "Quicksort", "Heapsor" → "Heapsort", "algorythm" → "algorithm"
+- Technical terms: "comparsion" → "comparison", "performence" → "performance"
+
+IMPORTANT NOTES:
+- This transcript contains many spelling mistakes, especially in algorithm names
+- Focus on understanding the intended meaning rather than the exact wording
+- ALWAYS correct algorithm and technical term spelling errors
+- Create professional, error-free topic names and descriptions  
+- Look for natural content boundaries and thematic shifts
+- Ensure all technical terminology is spelled correctly in your output
+
+Please provide a comprehensive topic analysis following the specified JSON format with clean, corrected content."""
 
             data = {
                 "model": self.clustering_model,
@@ -127,7 +292,7 @@ Please provide a comprehensive topic analysis following the specified JSON forma
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.1,
+                "temperature": 0.2,  # Slightly higher for better error correction creativity
                 "max_tokens": 4000
             }
             
@@ -238,40 +403,126 @@ Please provide a comprehensive topic analysis following the specified JSON forma
             if not topic_segments:
                 return f"Summary for {topic['name']}: No content available."
             
-            # Prepare content for summarization
-            topic_text = "\n".join([f"[{seg['start']:.2f}s] {seg['text']}" for seg in topic_segments])
+            # Prepare content for summarization with preprocessing
+            processed_topic_segments = []
+            for seg in topic_segments:
+                processed_text = self._preprocess_text(seg['text'])
+                processed_topic_segments.append(f"[{seg['start']:.2f}s] {processed_text}")
             
-            system_prompt = """You are an expert content summarizer. Your task is to create a comprehensive, well-structured summary of a specific topic from a video transcript.
+            topic_text = "\n".join(processed_topic_segments)
+            
+            system_prompt = """You are an expert content editor and summarizer. Your task is to create a comprehensive, polished summary of a specific topic from a video transcript.
 
-Instructions:
-1. Create a clear, engaging summary that captures the key points
-2. Organize the information logically
-3. Include specific details and examples when mentioned
-4. Make it informative and accessible
-5. Keep it concise but comprehensive (2-4 paragraphs)
-6. Focus on the main concepts, explanations, and takeaways
+CRITICAL INSTRUCTIONS:
+1. **Error Correction**: The transcript contains transcription errors, spelling mistakes, and grammatical issues. You MUST:
+   - Identify and correct spelling mistakes (e.g., "algorythm" → "algorithm", "comparsion" → "comparison")
+   - Fix grammatical errors and awkward phrasing
+   - Interpret garbled or unclear text based on context
+   - Use proper technical terminology and spelling
 
-Write the summary in a natural, flowing style that would be helpful for someone who wants to understand this topic without watching the video."""
+2. **Content Enhancement**: 
+   - You can ADD explanatory words and phrases to improve clarity
+   - Expand abbreviations and clarify technical terms
+   - Provide better sentence structure while keeping the original meaning
+   - Make the content more accessible to general audiences
 
-            user_prompt = f"""Please create a comprehensive summary for the topic "{topic['name']}":
+3. **Summary Quality**:
+   - Write in clear, professional, human-friendly language
+   - Use proper grammar, punctuation, and spelling throughout
+   - Organize information logically with smooth transitions
+   - Keep it engaging and informative (2-4 well-structured paragraphs)
+   - Focus on key concepts, explanations, examples, and practical takeaways
 
-Topic Description: {topic.get('description', 'N/A')}
-Keywords: {', '.join(topic.get('keywords', []))}
-Duration: {topic.get('start_time', 0):.1f}s to {topic.get('end_time', 0):.1f}s
+4. **Style Guidelines**:
+   - Use active voice where possible
+   - Write for someone who wants to understand the topic without watching the video
+   - Include specific details and examples when available
+   - Maintain a friendly, educational tone
 
-Content:
+Remember: Your goal is to transform potentially error-filled transcript text into polished, professional, human-readable content that accurately conveys the intended meaning."""
+
+            user_prompt = f"""Create a polished, professional summary for the topic "{topic['name']}":
+
+**Topic Information:**
+- Description: {topic.get('description', 'N/A')}
+- Key Concepts: {', '.join(topic.get('keywords', []))}
+- Duration: {topic.get('start_time', 0):.1f}s to {topic.get('end_time', 0):.1f}s
+
+**Raw Transcript Content (contains errors that need correction):**
 {topic_text}
 
-Please provide a detailed summary of this topic."""
+**CRITICAL ERROR CORRECTIONS - FIX THESE EXACTLY:**
+
+ALGORITHM NAME ERRORS (ALWAYS FIX):
+❌ "bubble soar" → ✅ "bubble sort"
+❌ "quick soar" → ✅ "quicksort" 
+❌ "Quicksor" → ✅ "Quicksort"
+❌ "tim soar" → ✅ "timsort"
+❌ "heap soar" → ✅ "heapsort"
+❌ "Heapsor" → ✅ "Heapsort"
+❌ "merge soar" → ✅ "merge sort"
+❌ "insertion soar" → ✅ "insertion sort"
+❌ "selection soar" → ✅ "selection sort"
+
+TECHNICAL TERM ERRORS (ALWAYS FIX):
+❌ "algorythm/algorythms" → ✅ "algorithm/algorithms"
+❌ "comparsion/comparsions" → ✅ "comparison/comparisons"  
+❌ "performence" → ✅ "performance"
+❌ "efficency" → ✅ "efficiency"
+❌ "implemention" → ✅ "implementation"
+
+IMPORTANT: Scan the entire text for these specific errors and fix every instance!
+
+**Your Task:**
+1. **FIRST: Scan for and fix all algorithm name errors** (soar→sort, sor→sort, missing letters)
+2. **Correct all spelling and grammatical errors** in the transcript
+3. **Fix technical terminology** - ensure algorithm names, programming concepts, and technical terms are spelled correctly
+4. **Improve clarity and readability** while preserving the original meaning  
+5. **Add explanatory context** where helpful for understanding (e.g., explain time complexity, algorithm benefits)
+6. **Remove filler words** like "um", "uh", "you know", "like" that don't add value
+7. **Create a flowing, well-structured summary** that someone can easily understand
+8. **Use proper technical terminology** and professional language
+9. **Make it human-friendly** - write as if explaining to an interested friend who wants to learn
+
+**Output Requirements:**
+- 2-4 well-written paragraphs
+- Perfect spelling, grammar, and punctuation
+- Clear, engaging, and informative content
+- Professional yet accessible tone
+- Include specific examples and details mentioned in the content
+
+Please provide a polished, error-free summary that transforms the raw transcript into professional, readable content."""
+
+            # Add an example to show the model exactly what we want
+            example_message = """EXAMPLE OF PROPER ERROR CORRECTION:
+
+Input (with errors): "Quicksor is one of the most popular algorythms that also uses the divide and conqur strategy. Programming languges like JavaScript use Quicksor in their standrd library fetures."
+
+Output (corrected): "Quicksort is one of the most popular algorithms that uses the divide and conquer strategy. This efficient sorting algorithm works by selecting a 'pivot' element and partitioning the array around it. Programming languages like JavaScript use Quicksort in their standard library features because of its excellent average-case performance of O(n log n)."
+
+Notice how I:
+1. Fixed "Quicksor" → "Quicksort"
+2. Fixed "algorythms" → "algorithms" 
+3. Fixed "conqur" → "conquer"
+4. Fixed "languges" → "languages"
+5. Fixed "standrd" → "standard"
+6. Fixed "fetures" → "features"
+7. Added explanatory context about how the algorithm works
+8. Made the text flow naturally and professionally
+
+Now apply the same approach to the content below."""
 
             data = {
                 "model": self.summary_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": example_message},
+                    {"role": "assistant", "content": "I understand. I will carefully correct all spelling and grammar errors, especially algorithm names, while preserving the original meaning and adding helpful context. I'll make sure to fix common transcription errors like 'soar' → 'sort', 'sor' → 'sort', and technical term misspellings."},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.3,
-                "max_tokens": 1000
+                "temperature": 0.6,  # Higher temperature to encourage creative error correction
+                "max_tokens": 1200,  # More tokens for detailed, comprehensive summaries
+                "top_p": 0.9  # Add nucleus sampling for better text generation
             }
             
             logger.info(f"Generating summary for topic: {topic['name']}")

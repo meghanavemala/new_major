@@ -388,8 +388,8 @@ class OpenRouterSummarizer:
         topics: List[Dict[str, Any]], 
         segments: List[Dict[str, Any]]
     ) -> Dict[str, str]:
-        """Generate fallback summaries"""
-        logger.info("Generating fallback summaries")
+        """Generate enhanced fallback summaries with basic error correction"""
+        logger.info("Generating enhanced fallback summaries")
         summaries = {}
         
         for topic in topics:
@@ -402,20 +402,106 @@ class OpenRouterSummarizer:
             ]
             
             if topic_segments:
-                # Simple summary: first few sentences + keywords
-                text_samples = [seg["text"] for seg in topic_segments[:3]]
-                summary = f"{topic['name']}: " + " ".join(text_samples)
-                if len(summary) > 300:
-                    summary = summary[:297] + "..."
+                # Get all text from topic segments
+                all_text = " ".join([seg["text"] for seg in topic_segments])
+                
+                # Basic error correction and cleanup
+                cleaned_text = self._basic_text_cleanup(all_text)
+                
+                # Create a more structured summary
+                if len(cleaned_text) > 400:
+                    # Take first part and add continuation
+                    summary = cleaned_text[:350].rsplit('.', 1)[0] + "."
+                    if not summary.endswith('.'):
+                        summary += "..."
+                else:
+                    summary = cleaned_text
+                
+                # Add topic context
+                summary = f"This section covers {topic['name'].lower()}. {summary}"
                 
                 if topic.get("keywords"):
-                    summary += f"\n\nKey concepts: {', '.join(topic['keywords'])}"
+                    summary += f"\n\nKey concepts discussed: {', '.join(topic['keywords'])}"
                 
                 summaries[topic_id] = summary
             else:
-                summaries[topic_id] = f"Summary for {topic['name']}: Content analysis in progress."
+                summaries[topic_id] = f"This section focuses on {topic['name'].lower()}. Content analysis is being processed to provide a detailed summary."
         
         return summaries
+    
+    def _basic_text_cleanup(self, text: str) -> str:
+        """Apply basic text cleanup and error correction"""
+        try:
+            import re
+            
+            # Basic cleanup
+            cleaned = text.strip()
+            
+            # Fix common transcription errors - ESPECIALLY ALGORITHM NAMES
+            common_fixes = {
+                # CRITICAL: Algorithm name corrections
+                r'\bbubble soar\b': 'bubble sort',
+                r'\bquick soar\b': 'quicksort',
+                r'\bquicksor\b': 'quicksort',
+                r'\bquick sor\b': 'quicksort',
+                r'\btim soar\b': 'timsort',
+                r'\bheap soar\b': 'heapsort',
+                r'\bheapsor\b': 'heapsort',
+                r'\bmerge soar\b': 'merge sort',
+                r'\binsertion soar\b': 'insertion sort',
+                r'\bselection soar\b': 'selection sort',
+                
+                # Other technical terms
+                r'\balgorythm\b': 'algorithm',
+                r'\balgorthm\b': 'algorithm', 
+                r'\bcomparsion\b': 'comparison',
+                r'\bperformence\b': 'performance',
+                r'\befficienty\b': 'efficiency',
+                r'\bimplemention\b': 'implementation',
+                r'\bexampel\b': 'example',
+                
+                # Common words
+                r'\bteh\b': 'the',
+                r'\band and\b': 'and',
+                r'\btha\b': 'the',
+                r'\bis is\b': 'is',
+                r'\bwill will\b': 'will',
+                r'\bcan can\b': 'can',
+                
+                # Fix repeated words
+                r'\b(\w+)\s+\1\b': r'\1',
+                # Fix spacing around punctuation
+                r'\s+([,.!?])': r'\1',
+                r'([,.!?])\s*([A-Z])': r'\1 \2'
+            }
+            
+            for pattern, replacement in common_fixes.items():
+                cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+            
+            # Fix multiple spaces
+            cleaned = re.sub(r'\s+', ' ', cleaned)
+            
+            # Ensure proper sentence capitalization
+            sentences = cleaned.split('. ')
+            capitalized_sentences = []
+            for sentence in sentences:
+                if sentence:
+                    sentence = sentence.strip()
+                    if sentence:
+                        sentence = sentence[0].upper() + sentence[1:] if len(sentence) > 1 else sentence.upper()
+                        capitalized_sentences.append(sentence)
+            
+            cleaned = '. '.join(capitalized_sentences)
+            
+            # Ensure proper ending
+            if cleaned and not cleaned.endswith(('.', '!', '?')):
+                cleaned += '.'
+                
+            return cleaned
+            
+        except Exception as e:
+            logger.warning(f"Text cleanup failed: {e}")
+            return text.strip()
 
 def analyze_video_topics(
     segments: List[Dict[str, Any]], 
