@@ -20,6 +20,12 @@ def load_config() -> Dict[str, Any]:
         "SECRET_KEY": os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production"),
         "PARALLEL_DOWNLOADS": int(os.environ.get("PARALLEL_DOWNLOADS", "5")),
         "LOW_VRAM_MODE": os.environ.get("LOW_VRAM_MODE", "True").lower() == 'true',
+        
+        # OpenRouter Configuration
+        "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY"),
+        "OPENROUTER_CLUSTERING_MODEL": os.environ.get("OPENROUTER_CLUSTERING_MODEL", "anthropic/claude-3.5-sonnet"),
+        "OPENROUTER_SUMMARY_MODEL": os.environ.get("OPENROUTER_SUMMARY_MODEL", "anthropic/claude-3.5-sonnet"),
+        "USE_OPENROUTER": os.environ.get("USE_OPENROUTER", "true").lower() == "true",
     }
 
 

@@ -414,12 +414,31 @@ body {
     justify-content: center;
     font-weight: 600;
     margin-right: 15px;
+    flex-shrink: 0;
+}
+
+.topic-title-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
 }
 
 .topic-title {
     font-size: 1.3rem;
     font-weight: 600;
     color: #333;
+    line-height: 1.2;
+}
+
+.topic-duration {
+    font-size: 0.9rem;
+    color: #888;
+    font-weight: 500;
+}
+
+.topic-duration i {
+    margin-right: 4px;
 }
 
 .topic-summary {

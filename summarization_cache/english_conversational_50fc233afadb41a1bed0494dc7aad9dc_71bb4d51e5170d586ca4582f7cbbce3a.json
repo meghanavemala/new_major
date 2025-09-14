@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Every programmer has ran into at least one sorting algorithm at one point in their career. Today, I'm going to easily explain 10 of the most popular sorting algorithms, as well as the pros and cons of each. Bubble Soar is the easiest. Selection sort is known as an in place comparison sorting algorithm.",
+    "quality_score": 0.740618297762407,
+    "model_used": "bart_large_cnn",
+    "original_length": 401,
+    "summary_length": 54,
+    "compression_ratio": 0.13466334164588528,
+    "processing_time": 15.839143753051758,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T14:06:11.810048"
+  },
+  "timestamp": 1757838971.810048
+}

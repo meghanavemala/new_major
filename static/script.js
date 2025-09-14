@@ -528,14 +528,46 @@ function createTopicCard(summary, keywords, index, data) {
     card.className = 'topic-card';
     card.dataset.topicIndex = index;
     
-    const keywordsHtml = keywords ? keywords.map(kw => `<span class="keyword-tag">${kw}</span>`).join('') : '';
+    // Handle both old format and new topic summary format
+    let topicTitle = `Topic ${index + 1}`;
+    let topicSummary = summary;
+    let topicKeywords = keywords || [];
+    let topicDuration = '';
+    
+    // Check if we have enhanced topic data
+    if (data.topic_videos && data.topic_videos[index]) {
+        const topicData = data.topic_videos[index];
+        if (topicData.name && topicData.name !== `Topic ${index + 1}`) {
+            topicTitle = topicData.name;
+        }
+        if (topicData.summary) {
+            topicSummary = topicData.summary;
+        }
+        if (topicData.keywords && Array.isArray(topicData.keywords)) {
+            topicKeywords = topicData.keywords;
+        }
+        if (topicData.duration) {
+            const minutes = Math.floor(topicData.duration / 60);
+            const seconds = Math.floor(topicData.duration % 60);
+            topicDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }
+    
+    const keywordsHtml = topicKeywords.length > 0 
+        ? topicKeywords.map(kw => `<span class="keyword-tag">${kw}</span>`).join('') 
+        : '';
+    
+    const durationHtml = topicDuration ? `<span class="topic-duration"><i class="fas fa-clock"></i> ${topicDuration}</span>` : '';
     
     card.innerHTML = `
         <div class="topic-header">
             <div class="topic-number">${index + 1}</div>
-            <div class="topic-title">Topic ${index + 1}</div>
+            <div class="topic-title-section">
+                <div class="topic-title">${topicTitle}</div>
+                ${durationHtml}
+            </div>
         </div>
-        <div class="topic-summary">${summary}</div>
+        <div class="topic-summary">${topicSummary}</div>
         <div class="topic-keywords">${keywordsHtml}</div>
         <div class="topic-actions">
             <button class="btn btn-sm" onclick="playTopic(${index})">

@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "TimSort was made in 2002 and is still being used to this day in Python. TimSort separates an array into small subarrays called runs. These runs are then sorted using insertion sort. Once all the runs have been sorted, it then starts to use merge sort on the two smallest arrays.",
+    "quality_score": 0.7765237652737162,
+    "model_used": "bart_large_cnn",
+    "original_length": 414,
+    "summary_length": 51,
+    "compression_ratio": 0.12318840579710146,
+    "processing_time": 3.703066349029541,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T14:06:37.474545"
+  },
+  "timestamp": 1757838997.474545
+}

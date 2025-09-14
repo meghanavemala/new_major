@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": " insertion sort creates two arrays, one sorted and one unsorted. It goes through each element one by one in the unsorted array. With the element that is on, it determines where in the sorted list the element belongs to. Merge sort has a worst case performance of big O and log n.",
+    "quality_score": 0.7534335381554482,
+    "model_used": "bart_large_cnn",
+    "original_length": 399,
+    "summary_length": 52,
+    "compression_ratio": 0.13032581453634084,
+    "processing_time": 1.5235834121704102,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T14:06:17.036459"
+  },
+  "timestamp": 1757838977.036459
+}

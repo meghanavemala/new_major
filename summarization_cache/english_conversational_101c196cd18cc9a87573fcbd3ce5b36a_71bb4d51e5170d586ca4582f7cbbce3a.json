@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Start building a max heap in a process called heapify. Once the tree is built, the top element switches with the element at the end. The heap is then rebuilt and the numbers switch again. Rinse and repeat until sorted. And this means that the worst and best case scenario is big O and log N.",
+    "quality_score": 0.746339386322679,
+    "model_used": "bart_large_cnn",
+    "original_length": 409,
+    "summary_length": 56,
+    "compression_ratio": 0.13691931540342298,
+    "processing_time": 2.642587423324585,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T14:06:29.590138"
+  },
+  "timestamp": 1757838989.590138
+}

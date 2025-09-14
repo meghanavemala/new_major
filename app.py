@@ -49,6 +49,8 @@ from utils.advanced_ocr import advanced_ocr, extract_text_from_image
 from utils.production_monitor import production_monitor, monitor_performance, monitor_operation, get_monitoring_stats
 from utils.tts import text_to_speech
 from utils.gpu_config import log_gpu_status, clear_gpu_memory, is_gpu_available, force_gpu
+from utils.subtitle_extractor import extract_and_save_subtitles
+from utils.openrouter_client import OpenRouterClient, test_openrouter_connection
 
 # --- GPU startup check ---
 import torch
@@ -421,6 +423,8 @@ def process():
 
             try:
                 update_processing_status(processing_status, video_id, "analyzing", 55, "Analyzing content for coherent topics...")
+                
+                # Add OCR context to segments if available
                 if enable_ocr and ocr_summary.get("high_confidence_text"):
                     ocr_context = ocr_summary["high_confidence_text"]
                     if ocr_context.strip() and segments:
@@ -428,66 +432,89 @@ def process():
                         for i, chunk in enumerate(ocr_chunks):
                             seg_idx = min(i, len(segments) - 1)
                             segments[seg_idx]["text"] += f" [Visual context: {chunk}]"
-                logger.info(f"Starting topic analysis on {len(segments)} segments...")
-                # Use technical topic analyzer for better topic detection and summarization
-                from utils.technical_topic_analyzer import TechnicalTopicAnalyzer
-                from utils.technical_summarizer import TechnicalSummarizer
                 
-                # Initialize technical components
-                topic_analyzer = TechnicalTopicAnalyzer()
-                tech_summarizer = TechnicalSummarizer()
+                logger.info(f"Starting OpenRouter-based topic analysis on {len(segments)} segments...")
                 
-                # Analyze and group topics
-                logger.info("Analyzing technical topics...")
+                # Use OpenRouter-based topic analyzer for intelligent clustering and summarization
+                from utils.openrouter_topic_analyzer import analyze_video_topics
+                
                 topics_dir = os.path.join(CONFIG["PROCESSED_DIR"], str(video_id))
-                topics, timestamps_file, segments_file = topic_analyzer.analyze_segments(
+                
+                # Analyze topics and generate summaries using OpenRouter
+                topic_summaries, summaries_file = analyze_video_topics(
                     segments=segments,
-                    output_dir=topics_dir
+                    output_dir=topics_dir,
+                    config=CONFIG
                 )
                 
-                # Generate structured summaries for each topic
-                logger.info("Generating technical summaries...")
-                summaries_file = tech_summarizer.summarize_topics(
-                    topics=topics,
-                    output_dir=topics_dir
-                )
-                
-                # Load the generated summaries
-                with open(summaries_file, 'r', encoding='utf-8') as f:
-                    topic_summaries = json.load(f)
+                # Process the topic summaries into the expected format
+                topics = []
+                for topic_summary in topic_summaries:
+                    topic_id = topic_summary['topic_id']
                     
-                    # Process the structured summaries
-                    topics = []
-                    for topic_summary in topic_summaries:
-                        topic_id = topic_summary['topic_id']
-                        
-                        # Extract the data we need
-                        topic_entry = {
-                            'id': topic_id,
-                            'name': topic_summary['name'],
-                            'keywords': topic_summary['summary']['key_concepts'],
-                            'technical_terms': topic_summary['summary']['technical_terms'],
-                            'start_time': topic_summary['start_time'],
-                            'end_time': topic_summary['end_time'],
-                            'duration': topic_summary['end_time'] - topic_summary['start_time'],
-                            'summary': topic_summary['summary']['overview'],
-                            'examples': topic_summary['summary']['examples']
-                        }
-                        topics.append(topic_entry)
-                        
-                        # Mark segments with topic ID
-                        for segment in segments:
-                            if (topic_summary['start_time'] <= segment.get('start', 0) <= topic_summary['end_time'] or
-                                topic_summary['start_time'] <= segment.get('end', 0) <= topic_summary['end_time']):
-                                segment['topic_id'] = topic_id
+                    # Extract the data we need
+                    topic_entry = {
+                        'id': topic_id,
+                        'name': topic_summary['name'],
+                        'keywords': topic_summary.get('keywords', []),
+                        'start_time': topic_summary['start_time'],
+                        'end_time': topic_summary['end_time'],
+                        'duration': topic_summary['duration'],
+                        'summary': topic_summary['summary']
+                    }
+                    topics.append(topic_entry)
+                    
+                    # Mark segments with topic ID (map by timestamp)
+                    for segment in segments:
+                        seg_start = segment.get('start', 0)
+                        seg_end = segment.get('end', 0)
+                        if (topic_summary['start_time'] <= seg_start <= topic_summary['end_time'] or
+                            topic_summary['start_time'] <= seg_end <= topic_summary['end_time'] or
+                            (seg_start <= topic_summary['start_time'] and seg_end >= topic_summary['end_time'])):
+                            segment['topic_id'] = topic_id
+                
                 if not topics:
                     raise ValueError("No coherent topics could be identified in the content")
-                logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")
+                
+                logger.info(f"Successfully analyzed content using OpenRouter: {len(topics)} topics identified")
+                for topic in topics:
+                    logger.info(f"  - Topic {topic['id']}: {topic['name']} ({topic['duration']:.1f}s)")
+                
             except Exception as e:
-                logger.error(f"Topic analysis failed: {str(e)}")
+                logger.error(f"OpenRouter topic analysis failed: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
-                update_processing_status(processing_status, video_id, "error", 0, "Failed to analyze video content for topics", str(e))
-                return
+                
+                # Fallback to simple topic analysis if OpenRouter fails
+                logger.info("Falling back to simple topic analysis...")
+                try:
+                    from utils.openrouter_topic_analyzer import OpenRouterTopicAnalyzer, OpenRouterSummarizer
+                    
+                    analyzer = OpenRouterTopicAnalyzer()
+                    summarizer = OpenRouterSummarizer()
+                    
+                    # Use fallback analysis (no OpenRouter)
+                    topics, _, _ = analyzer.analyze_segments(segments, topics_dir)
+                    summaries = summarizer._generate_fallback_summaries(topics, segments)
+                    
+                    # Update topics with summaries
+                    for topic in topics:
+                        topic_id = str(topic["id"])
+                        topic['summary'] = summaries.get(topic_id, f"Summary for {topic['name']}")
+                        
+                        # Mark segments with topic ID
+                        for i in topic.get('segment_indices', []):
+                            if i < len(segments):
+                                segments[i]['topic_id'] = topic['id']
+                    
+                    if not topics:
+                        raise ValueError("No coherent topics could be identified in the content")
+                    
+                    logger.info(f"Fallback analysis completed: {len(topics)} topics identified")
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Fallback topic analysis also failed: {fallback_error}")
+                    update_processing_status(processing_status, video_id, "error", 0, "Failed to analyze video content for topics", str(e))
+                    return
 
             logger.info(f"Identified {len(topics)} distinct topics: {[t['name'] for t in topics]}")
             try:
@@ -963,6 +990,28 @@ def get_performance():
 def serve_processed_file(filename: str):
     """Serve files from the processed directory for playback/download."""
     return send_from_directory(CONFIG["PROCESSED_DIR"], filename)
+
+
+@app.route("/api/test-openrouter", methods=["GET"])
+def api_test_openrouter():
+    """Test OpenRouter API connection."""
+    try:
+        if not CONFIG.get("USE_OPENROUTER", True):
+            return jsonify({"success": False, "message": "OpenRouter is disabled"}), 200
+        
+        if not CONFIG.get("OPENROUTER_API_KEY"):
+            return jsonify({"success": False, "message": "OpenRouter API key not configured"}), 200
+        
+        # Test connection
+        success = test_openrouter_connection()
+        
+        if success:
+            return jsonify({"success": True, "message": "OpenRouter connection successful"})
+        else:
+            return jsonify({"success": False, "message": "OpenRouter connection failed"}), 500
+            
+    except Exception as e:
+        return jsonify({"success": False, "message": f"OpenRouter test error: {str(e)}"}), 500
 
 
 @app.route("/api/test-upload", methods=["POST"])

@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Quicksor is one of the most popular algorithms that also uses the divide and conquer sorting strategy. Programming languages like JavaScript, Ruby, and PHP use Quicksor in their standard library features. Heapsor is another comparison based algorithm, also known as selection sort using the right data structure.",
+    "quality_score": 0.7391641781591901,
+    "model_used": "bart_large_cnn",
+    "original_length": 367,
+    "summary_length": 47,
+    "compression_ratio": 0.12806539509536785,
+    "processing_time": 1.41902756690979,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T14:06:22.212309"
+  },
+  "timestamp": 1757838982.212309
+}

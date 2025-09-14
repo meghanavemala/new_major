@@ -16,6 +16,9 @@ sentence-transformers>=2.2.2
 openai-whisper @ git+https://github.com/openai/whisper.git
 faster-whisper>=1.1.1
 scikit-learn>=1.4.2
+
+# OpenRouter Integration
+requests>=2.31.0
  
  
 gensim==4.3.2
