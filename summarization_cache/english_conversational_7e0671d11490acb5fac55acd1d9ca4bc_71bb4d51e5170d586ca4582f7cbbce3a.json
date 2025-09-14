@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "In 17 minutes you will know how to pick the right algorithm for any problem. You will get a basic intuition of each algorithm and how they relate to each other. My goal is to give as many of you as possible an intuitive understanding of the major machine learning algorithms.",
+    "quality_score": 0.6707018299403538,
+    "model_used": "bart_large_cnn",
+    "original_length": 706,
+    "summary_length": 51,
+    "compression_ratio": 0.07223796033994334,
+    "processing_time": 55.054073333740234,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T20:07:43.804040"
+  },
+  "timestamp": 1757860663.80404
+}

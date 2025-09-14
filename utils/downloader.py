@@ -143,23 +143,16 @@ def handle_video_upload_or_download(request, upload_dir):
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
             try:
-                # Use GPU-accelerated FFmpeg if available
-                if is_gpu_available():
-                    cmd = [
-                        "ffmpeg", "-i", temp_file,
-                        "-c:v", "h264_nvenc", "-preset", "fast",
-                        "-c:a", "aac", "-b:a", "96k",
-                        compressed_path
-                    ]
-                    log_gpu_status()
-                else:
-                    cmd = [
-                        "ffmpeg", "-i", temp_file,
-                        "-vcodec", "libx264", "-crf", "28",
-                        "-preset", "fast",
-                        "-acodec", "aac", "-b:a", "96k",
-                        compressed_path
-                    ]
+                # Use CPU encoding for maximum compatibility
+                # GPU encoding (h264_nvenc) causes issues with older drivers
+                cmd = [
+                    "ffmpeg", "-i", temp_file,
+                    "-vcodec", "libx264", "-crf", "28",
+                    "-preset", "fast",
+                    "-acodec", "aac", "-b:a", "96k",
+                    compressed_path
+                ]
+                logger.info("Using CPU encoding for YouTube video compression")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
@@ -226,23 +219,16 @@ def handle_video_upload_or_download_from_data(video_file_data, yt_url_data, uplo
 
             compressed_path = os.path.join(upload_dir, f"{video_id}.mp4")
             try:
-                # Use GPU-accelerated FFmpeg if available
-                if is_gpu_available():
-                    cmd = [
-                        "ffmpeg", "-i", temp_file,
-                        "-c:v", "h264_nvenc", "-preset", "fast",
-                        "-c:a", "aac", "-b:a", "96k",
-                        compressed_path
-                    ]
-                    log_gpu_status()
-                else:
-                    cmd = [
-                        "ffmpeg", "-i", temp_file,
-                        "-vcodec", "libx264", "-crf", "28",
-                        "-preset", "fast",
-                        "-acodec", "aac", "-b:a", "96k",
-                        compressed_path
-                    ]
+                # Use CPU encoding for maximum compatibility
+                # GPU encoding (h264_nvenc) causes issues with older drivers
+                cmd = [
+                    "ffmpeg", "-i", temp_file,
+                    "-vcodec", "libx264", "-crf", "28",
+                    "-preset", "fast",
+                    "-acodec", "aac", "-b:a", "96k",
+                    compressed_path
+                ]
+                logger.info("Using CPU encoding for YouTube video compression")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
@@ -365,23 +351,16 @@ def handle_youtube_download(yt_url, upload_dir, video_id=None, status_callback=N
         for attempt in range(max_retries):
             try:
                 if os.path.exists(final_temp_file):
-                    # Use GPU-accelerated FFmpeg if available
-                    if is_gpu_available():
-                        cmd = [
-                            "ffmpeg", "-i", final_temp_file,
-                            "-c:v", "h264_nvenc", "-preset", "fast",
-                            "-c:a", "aac", "-b:a", "96k",
-                            compressed_path
-                        ]
-                        log_gpu_status()
-                    else:
-                        cmd = [
-                            "ffmpeg", "-i", final_temp_file,
-                            "-vcodec", "libx264", "-crf", "28",
-                            "-preset", "fast",
-                            "-acodec", "aac", "-b:a", "96k",
-                            compressed_path
-                        ]
+                    # Use CPU encoding for maximum compatibility
+                    # GPU encoding (h264_nvenc) causes issues with older drivers
+                    cmd = [
+                        "ffmpeg", "-i", final_temp_file,
+                        "-vcodec", "libx264", "-crf", "28",
+                        "-preset", "fast",
+                        "-acodec", "aac", "-b:a", "96k",
+                        compressed_path
+                    ]
+                    logger.info("Using CPU encoding for YouTube video compression")
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 

@@ -1,6 +1,6 @@
 {
-  "timestamp": 3074.418716430664,
-  "overall_health": "fair",
+  "timestamp": 1586.7978489398956,
+  "overall_health": "poor",
   "component_status": {
     "transcription": "healthy",
     "keyframe_extraction": "unknown",
@@ -12,7 +12,7 @@
     "ocr": "unknown",
     "audio_visual_sync": "unknown"
   },
-  "performance_score": 50.480769230769226,
-  "uptime": 3074.418716430664,
+  "performance_score": 40.81967213114754,
+  "uptime": 1586.7978489398956,
   "last_error": {
     "timestamp": 

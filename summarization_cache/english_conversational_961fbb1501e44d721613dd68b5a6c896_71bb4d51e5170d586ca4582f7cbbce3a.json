@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "and want to find unknown clusters just by looking at the overall structure of the data and trying to find potential clusters in the data. For example,...",
+    "quality_score": 0.6065196232064243,
+    "model_used": "bart_large_xsum",
+    "original_length": 691,
+    "summary_length": 27,
+    "compression_ratio": 0.03907380607814761,
+    "processing_time": 17.359767198562622,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T20:11:16.129659"
+  },
+  "timestamp": 1757860876.129659
+}

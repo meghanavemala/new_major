@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "Logistic regression is a variant of linear regression and probably the most basic classification algorithm. Instead of fitting a line to two numerical variables, you now try to predict a categorical output variable using categorical or numerical input variables. The K nearest neighbors algorithm, or KNN, is a very simple and intuitive algorithm that can be used for both regression and classification.",
+    "quality_score": 0.6248882254854168,
+    "model_used": "bart_large_cnn",
+    "original_length": 735,
+    "summary_length": 62,
+    "compression_ratio": 0.08435374149659863,
+    "processing_time": 74.50904321670532,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T20:09:04.639148"
+  },
+  "timestamp": 1757860744.639148
+}

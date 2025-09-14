@@ -1,0 +1,15 @@
+{
+  "result": {
+    "summary": "The STM algorithm tries to find the line that separates the classes with the largest margin possible. This makes the decision boundary generalized well and less sensitive to noise and outliers in the training data. Another feature that makes SVMs extremely powerful is the use of so-called kernel functions, which allow for the identification of highly complex nonlinear decision boundaries.",
+    "quality_score": 0.6933848715586469,
+    "model_used": "bart_large_cnn",
+    "original_length": 692,
+    "summary_length": 60,
+    "compression_ratio": 0.08670520231213873,
+    "processing_time": 69.72404408454895,
+    "language": "english",
+    "content_type": "conversational",
+    "timestamp": "2025-09-14T20:10:20.367579"
+  },
+  "timestamp": 1757860820.367579
+}

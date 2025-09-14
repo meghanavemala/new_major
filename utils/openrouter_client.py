@@ -521,7 +521,7 @@ Now apply the same approach to the content below."""
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.6,  # Higher temperature to encourage creative error correction
-                "max_tokens": 1200,  # More tokens for detailed, comprehensive summaries
+                "max_tokens": 4000,  # Increased tokens for comprehensive summaries without truncation
                 "top_p": 0.9  # Add nucleus sampling for better text generation
             }
             
